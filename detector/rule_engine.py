@@ -172,6 +172,21 @@ class RuleEngine:
                     state.owner_person_id,
                     timestamp,
                 )
+            else:
+                # Object appeared already away from any person.
+                # If it is on the ground, treat it as released litter.
+                _, oy = obj.bottom_center
+                if oy >= self._ground_y:
+                    state.phase = _Phase.RELEASED
+                    state.released_at = timestamp
+                    state.phase = _Phase.ON_GROUND
+                    state.stationary_since = timestamp
+                    state.last_position = obj.center
+                    logger.debug(
+                        "Track %d found on ground (no owner) @ %.1fs",
+                        obj.track_id,
+                        timestamp,
+                    )
             state.last_position = obj.center
             return None
 

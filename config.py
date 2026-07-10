@@ -36,13 +36,13 @@ class Settings(BaseSettings):
     # --- Model --------------------------------------------------------------
     yolo_model: str = "yolo11n.pt"
     device: str = "cpu"
-    conf_threshold: float = 0.30
+    conf_threshold: float = 0.15
 
     # --- Rule engine --------------------------------------------------------
-    stationary_seconds: float = 5.0
+    stationary_seconds: float = 2.0
     proximity_px: float = 120.0
     stationary_tolerance_px: float = 25.0
-    ground_y_ratio: float = 0.55
+    ground_y_ratio: float = 0.30
 
     # --- Recorder -----------------------------------------------------------
     pre_event_seconds: float = 5.0

@@ -29,6 +29,8 @@ _COCO_TO_CLASS: Dict[str, ObjectClass] = {
     "person": ObjectClass.PERSON,
     "bottle": ObjectClass.BOTTLE,
     "book": ObjectClass.PAPER,
+    "handbag": ObjectClass.HANDBAG,
+    "backpack": ObjectClass.BACKPACK,
 }
 
 

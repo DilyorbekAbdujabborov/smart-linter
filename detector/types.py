@@ -23,12 +23,14 @@ class ObjectClass(str, Enum):
     PERSON = "person"
     BOTTLE = "bottle"          # plastic bottle
     PAPER = "paper"            # approximated by COCO "book" (see detector.py)
+    HANDBAG = "handbag"        # handbag / small bag
+    BACKPACK = "backpack"      # backpack / large bag
     TRASH_BIN = "trash_bin"    # approximated by COCO "toilet"/custom later
 
     @property
     def is_trash(self) -> bool:
         """True for classes that count as discardable litter."""
-        return self in (ObjectClass.BOTTLE, ObjectClass.PAPER)
+        return self in (ObjectClass.BOTTLE, ObjectClass.PAPER, ObjectClass.HANDBAG, ObjectClass.BACKPACK)
 
 
 # Bounding box in pixel coords: (x1, y1, x2, y2).
