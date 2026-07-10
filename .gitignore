@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Env / secrets
+.env
+
+# Data / artifacts
+events/*.mp4
+events/*.jpg
+*.db
+*.sqlite3
+
+# Models (auto-downloaded)
+*.pt
+
+# OS
+.DS_Store
