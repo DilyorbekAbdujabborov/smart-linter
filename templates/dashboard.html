@@ -41,7 +41,7 @@
   </header>
   <main>
     {% if events %}
-    <div class="grid">
+    <div class="grid" id="events-grid">
       {% for e in events %}
       <div class="card">
         <video controls preload="metadata" poster="{{ e.preview_url }}">
@@ -60,8 +60,50 @@
       {% endfor %}
     </div>
     {% else %}
-    <div class="empty">No litter events recorded yet.</div>
+    <div class="empty" id="empty-msg">No litter events recorded yet.</div>
     {% endif %}
   </main>
+  <script>
+    (function() {
+      let eventCount = {{ events|length }};
+      const countEl = document.querySelector('.count');
+      const grid = document.getElementById('events-grid');
+      const emptyMsg = document.getElementById('empty-msg');
+
+      function createCard(e) {
+        const d = document.createElement('div');
+        d.className = 'card';
+        d.innerHTML =
+          '<video controls preload="metadata" poster="' + e.preview_url + '">' +
+            '<source src="' + e.video_url + '" type="video/mp4" />' +
+          '</video>' +
+          '<div class="body">' +
+            '<div class="row">' +
+              '<span class="tag">' + e.object_type + '</span>' +
+              '<span class="conf meta">' + Math.round(e.confidence * 100) + '%</span>' +
+            '</div>' +
+            '<div class="meta">📷 ' + e.camera_id + '</div>' +
+            '<div class="meta">🕒 ' + new Date(e.timestamp).toLocaleString() + '</div>' +
+            '<a class="btn" href="' + e.download_url + '">Download clip</a>' +
+          '</div>';
+        return d;
+      }
+
+      const es = new EventSource('/events/stream');
+      es.onmessage = function(ev) {
+        const data = JSON.parse(ev.data);
+        eventCount++;
+        countEl.textContent = eventCount + ' event(s)';
+        if (emptyMsg) emptyMsg.remove();
+        if (!grid) {
+          const g = document.createElement('div');
+          g.className = 'grid';
+          g.id = 'events-grid';
+          document.querySelector('main').appendChild(g);
+        }
+        document.getElementById('events-grid').prepend(createCard(data));
+      };
+    })();
+  </script>
 </body>
 </html>

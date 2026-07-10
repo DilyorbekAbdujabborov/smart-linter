@@ -21,10 +21,10 @@ class ObjectClass(str, Enum):
     """
 
     PERSON = "person"
-    BOTTLE = "bottle"          # plastic bottle
-    PAPER = "paper"            # approximated by COCO "book" (see detector.py)
-    HANDBAG = "handbag"        # handbag / small bag
-    BACKPACK = "backpack"      # backpack / large bag
+    BOTTLE = "bottle"          # plastic bottle, cup, wine glass, bowl
+    PAPER = "paper"            # book, tie, box
+    HANDBAG = "handbag"        # handbag, umbrella
+    BACKPACK = "backpack"      # backpack, suitcase
     TRASH_BIN = "trash_bin"    # approximated by COCO "toilet"/custom later
 
     @property

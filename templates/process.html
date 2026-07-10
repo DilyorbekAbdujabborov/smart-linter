@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Detection</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e0e0e0; min-height: 100vh; }
+
+        .header { background: #161822; padding: 16px 24px; border-bottom: 1px solid #2a2d3a; display: flex; align-items: center; gap: 16px; }
+        .header h1 { font-size: 20px; font-weight: 600; color: #fff; }
+        .header a { color: #6c5ce7; text-decoration: none; font-size: 14px; }
+
+        .controls { background: #161822; padding: 16px 24px; border-bottom: 1px solid #2a2d3a; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        select, button { background: #1e2030; color: #e0e0e0; border: 1px solid #2a2d3a; padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        select:hover, button:hover { border-color: #6c5ce7; }
+        button.start { background: #6c5ce7; color: #fff; border-color: #6c5ce7; }
+        button.start:hover { background: #5a4bd1; }
+        button.stop { background: #e74c3c; color: #fff; border-color: #e74c3c; }
+        .status { margin-left: auto; font-size: 13px; color: #888; }
+        .status.connected { color: #2ecc71; }
+        .status.error { color: #e74c3c; }
+
+        .main { display: flex; gap: 16px; padding: 16px 24px; height: calc(100vh - 130px); }
+
+        .video-container { flex: 1; position: relative; background: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .video-container canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .video-placeholder { color: #555; font-size: 16px; }
+
+        .sidebar { width: 320px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+
+        .panel { background: #161822; border: 1px solid #2a2d3a; border-radius: 8px; padding: 16px; }
+        .panel h3 { font-size: 14px; color: #888; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0.5px; }
+
+        .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1e2030; }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: #888; font-size: 13px; }
+        .stat-value { color: #fff; font-size: 13px; font-weight: 500; }
+
+        .detection-list { max-height: 300px; overflow-y: auto; }
+        .detection-item { padding: 8px 0; border-bottom: 1px solid #1e2030; font-size: 13px; }
+        .detection-item:last-child { border-bottom: none; }
+        .det-cls { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 6px; }
+        .det-cls.person { background: #2ecc71; color: #000; }
+        .det-cls.bottle { background: #3498db; color: #fff; }
+        .det-cls.paper { background: #f1c40f; color: #000; }
+        .det-cls.handbag { background: #e67e22; color: #fff; }
+        .det-cls.backpack { background: #9b59b6; color: #fff; }
+        .det-conf { color: #888; }
+
+        .violation-alert { background: rgba(231, 76, 60, 0.15); border: 1px solid #e74c3c; border-radius: 8px; padding: 16px; animation: pulse 1.5s infinite; }
+        .violation-alert h3 { color: #e74c3c; margin-bottom: 8px; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+        .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+        .legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #888; }
+        .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #161822; }
+        ::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Real-Time Litter Detection</h1>
+        <a href="/">&larr; Dashboard</a>
+    </div>
+
+    <div class="controls">
+        <select id="videoSelect">
+            {% for v in videos %}
+            <option value="video/{{ v }}">{{ v }}</option>
+            {% endfor %}
+        </select>
+        <button class="start" id="startBtn" onclick="startDetection()">Start Detection</button>
+        <button class="stop" id="stopBtn" onclick="stopDetection()" style="display:none;">Stop</button>
+        <div class="status" id="status">Ready</div>
+    </div>
+
+    <div class="main">
+        <div class="video-container">
+            <canvas id="videoCanvas" width="720" height="1280"></canvas>
+            <div class="video-placeholder" id="placeholder">Select a video and click Start Detection</div>
+        </div>
+
+        <div class="sidebar">
+            <div class="panel">
+                <h3>Statistics</h3>
+                <div class="stat-row">
+                    <span class="stat-label">Frame</span>
+                    <span class="stat-value" id="statFrame">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Time</span>
+                    <span class="stat-value" id="statTime">0.0s</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Objects Tracked</span>
+                    <span class="stat-value" id="statObjects">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">FPS</span>
+                    <span class="stat-value" id="statFPS">0</span>
+                </div>
+            </div>
+
+            <div id="violationPanel" style="display:none;">
+                <div class="violation-alert">
+                    <h3>VIOLATION DETECTED!</h3>
+                    <div id="violationInfo"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Detections</h3>
+                <div class="detection-list" id="detectionList">
+                    <div style="color:#555; font-size:13px;">Waiting for detection...</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Legend</h3>
+                <div class="legend">
+                    <div class="legend-item"><div class="legend-color" style="background:#0f0;"></div>Person</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#f00;"></div>Bottle / Cup / Glass / Bowl</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#ff0;"></div>Paper / Book / Tie / Box</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#f0a500;"></div>Handbag / Umbrella</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#800080;"></div>Backpack / Suitcase</div>
+                    <div class="legend-item"><div class="legend-color" style="background:#f00; height:2px; width:12px;"></div>Ground Line</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('placeholder');
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+
+        function startDetection() {
+            const source = document.getElementById('videoSelect').value;
+            if (!source) return;
+
+            stopDetection();
+
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws/process?source=${encodeURIComponent(source)}`);
+
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = '';
+            document.getElementById('status').textContent = 'Connecting...';
+            document.getElementById('status').className = 'status';
+
+            ws.onopen = () => {
+                document.getElementById('status').textContent = 'Connected';
+                document.getElementById('status').className = 'status connected';
+                placeholder.style.display = 'none';
+                canvas.style.display = '';
+            };
+
+            ws.onmessage = (evt) => {
+                const data = JSON.parse(evt.data);
+                handleFrame(data);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status').textContent = 'Disconnected';
+                document.getElementById('status').className = 'status';
+                document.getElementById('startBtn').style.display = '';
+                document.getElementById('stopBtn').style.display = 'none';
+            };
+
+            ws.onerror = () => {
+                document.getElementById('status').textContent = 'Error';
+                document.getElementById('status').className = 'status error';
+            };
+        }
+
+        function stopDetection() {
+            if (ws) { ws.close(); ws = null; }
+            document.getElementById('startBtn').style.display = '';
+            document.getElementById('stopBtn').style.display = 'none';
+        }
+
+        function handleFrame(data) {
+            // Draw frame
+            const img = new Image();
+            img.onload = () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = 'data:image/jpeg;base64,' + data.frame;
+
+            // Stats
+            document.getElementById('statFrame').textContent = data.frame_index;
+            document.getElementById('statTime').textContent = data.timestamp.toFixed(1) + 's';
+
+            // FPS
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFrameTime >= 1000) {
+                document.getElementById('statFPS').textContent = frameCount;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+
+            // Detections
+            document.getElementById('statObjects').textContent = data.detections.length;
+            const list = document.getElementById('detectionList');
+            if (data.detections.length === 0) {
+                list.innerHTML = '<div style="color:#555; font-size:13px;">No objects detected</div>';
+            } else {
+                list.innerHTML = data.detections.map(d =>
+                    `<div class="detection-item">
+                        <span class="det-cls ${d.cls}">${d.cls}</span>
+                        <span class="det-conf">${(d.conf * 100).toFixed(1)}%</span>
+                        <span style="color:#555; margin-left:6px;">#${d.track_id}</span>
+                    </div>`
+                ).join('');
+            }
+
+            // Violation
+            const vPanel = document.getElementById('violationPanel');
+            if (data.violation) {
+                vPanel.style.display = '';
+                document.getElementById('violationInfo').innerHTML =
+                    `<div class="stat-row"><span class="stat-label">Object</span><span class="stat-value">${data.violation.object_type}</span></div>` +
+                    `<div class="stat-row"><span class="stat-label">Time</span><span class="stat-value">${data.violation.timestamp}s</span></div>` +
+                    `<div class="stat-row"><span class="stat-label">Confidence</span><span class="stat-value">${(data.violation.confidence * 100).toFixed(1)}%</span></div>`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -27,10 +27,21 @@ logger = get_logger(__name__)
 # When a custom-trained model is dropped in later, just extend this mapping.
 _COCO_TO_CLASS: Dict[str, ObjectClass] = {
     "person": ObjectClass.PERSON,
+    # BOTTLE group
     "bottle": ObjectClass.BOTTLE,
+    "cup": ObjectClass.BOTTLE,
+    "wine glass": ObjectClass.BOTTLE,
+    "bowl": ObjectClass.BOTTLE,
+    # PAPER group
     "book": ObjectClass.PAPER,
+    "tie": ObjectClass.PAPER,
+    "box": ObjectClass.PAPER,
+    # HANDBAG group
     "handbag": ObjectClass.HANDBAG,
+    "umbrella": ObjectClass.HANDBAG,
+    # BACKPACK group
     "backpack": ObjectClass.BACKPACK,
+    "suitcase": ObjectClass.BACKPACK,
 }
 
 

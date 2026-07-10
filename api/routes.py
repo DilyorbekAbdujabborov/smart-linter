@@ -10,12 +10,14 @@ or embedded elsewhere without import-time side effects.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -71,6 +73,38 @@ def create_app() -> FastAPI:
         """List all violation events, newest first."""
         return [EventOut.model_validate(e) for e in database.list_events()]
 
+    # -- Real-time SSE (must be before /events/{event_id}) -------------------
+
+    @app.get("/events/stream", tags=["events"])
+    async def events_stream(request: Request):
+        """Server-Sent Events stream: pushes new events to the client."""
+        async def generate():
+            last_id = 0
+            events = database.list_events()
+            if events:
+                last_id = max(e.id for e in events)
+            while True:
+                if await request.is_disconnected():
+                    break
+                current_events = database.list_events()
+                for e in current_events:
+                    if e.id > last_id:
+                        payload = json.dumps({
+                            "id": e.id,
+                            "timestamp": e.timestamp.isoformat(),
+                            "camera_id": e.camera_id,
+                            "confidence": e.confidence,
+                            "object_type": e.object_type,
+                            "preview_url": f"/media/{os.path.basename(e.preview_image)}",
+                            "video_url": f"/media/{os.path.basename(e.video_path)}",
+                            "download_url": f"/events/{e.id}/download",
+                        })
+                        yield f"data: {payload}\n\n"
+                        last_id = e.id
+                await asyncio.sleep(2)
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
     @app.get("/events/{event_id}", response_model=EventOut, tags=["events"])
     def get_event(event_id: int) -> EventOut:
         """Fetch a single event by id."""
@@ -108,6 +142,110 @@ def create_app() -> FastAPI:
             filename=os.path.basename(event.video_path),
         )
 
+    # -- Real-time WebSocket processing ------------------------------------
+
+    @app.websocket("/ws/process")
+    async def ws_process(websocket: WebSocket, source: str = Query(...)):
+        """WebSocket endpoint: streams annotated frames from a video source.
+
+        Each message sent to the client is a JSON object:
+        {
+            "frame": "<base64 JPEG>",
+            "frame_index": int,
+            "timestamp": float,
+            "detections": [{"cls": str, "conf": float, "bbox": [x1,y1,x2,y2], "track_id": int}],
+            "violation": {"track_id": int, "object_type": str, "confidence": float, "timestamp": float} | null
+        }
+        """
+        await websocket.accept()
+        import base64
+        import cv2
+        from detector.detector import Detector
+        from detector.tracker import Tracker
+        from detector.rule_engine import RuleEngine
+        from camera.video_reader import VideoReader
+
+        try:
+            detector = Detector()
+            tracker = Tracker(detector)
+
+            with VideoReader(source) as reader:
+                rule_engine = RuleEngine(reader.height)
+                colors = {
+                    "person": (0, 255, 0),
+                    "bottle": (255, 0, 0),
+                    "paper": (255, 255, 0),
+                    "handbag": (0, 165, 255),
+                    "backpack": (128, 0, 128),
+                    "trash_bin": (128, 128, 128),
+                }
+
+                for frame in reader.frames():
+                    tracked = tracker.update(frame.image)
+                    violations = rule_engine.process(frame.timestamp, tracked)
+
+                    # Draw bounding boxes on frame
+                    annotated = frame.image.copy()
+                    for obj in tracked:
+                        x1, y1, x2, y2 = [int(v) for v in obj.bbox]
+                        color = colors.get(obj.cls.value, (255, 255, 255))
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        label = f"{obj.cls.value} {obj.confidence:.2f} #{obj.track_id}"
+                        cv2.putText(annotated, label, (x1, y1 - 8),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+                    # Draw ground line
+                    gy = int(rule_engine._ground_y)
+                    cv2.line(annotated, (0, gy), (annotated.shape[1], gy), (0, 0, 255), 1)
+                    cv2.putText(annotated, "GROUND", (10, gy - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+                    # Encode frame as JPEG base64
+                    _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    frame_b64 = base64.b64encode(buf).decode("utf-8")
+
+                    # Build detections list
+                    dets = [
+                        {
+                            "cls": obj.cls.value,
+                            "conf": round(obj.confidence, 3),
+                            "bbox": [round(v, 1) for v in obj.bbox],
+                            "track_id": obj.track_id,
+                        }
+                        for obj in tracked
+                    ]
+
+                    # Build violation info
+                    viol = None
+                    if violations:
+                        v = violations[0]
+                        viol = {
+                            "track_id": v.track_id,
+                            "object_type": v.object_type.value,
+                            "confidence": round(v.confidence, 3),
+                            "timestamp": round(v.timestamp, 2),
+                        }
+
+                    await websocket.send_json({
+                        "frame": frame_b64,
+                        "frame_index": frame.index,
+                        "timestamp": round(frame.timestamp, 2),
+                        "detections": dets,
+                        "violation": viol,
+                    })
+
+                    # Small sleep to not overwhelm the client
+                    await asyncio.sleep(0.03)
+
+        except WebSocketDisconnect:
+            logger.info("WebSocket client disconnected")
+        except Exception as e:
+            logger.error("WebSocket error: %s", e)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
     # -- Dashboard ----------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse, tags=["dashboard"])
@@ -130,6 +268,15 @@ def create_app() -> FastAPI:
         ]
         return templates.TemplateResponse(
             request, "dashboard.html", {"events": view}
+        )
+
+    @app.get("/process", response_class=HTMLResponse, tags=["dashboard"])
+    def process_page(request: Request) -> HTMLResponse:
+        """Render the real-time detection processing page."""
+        import glob as globmod
+        videos = [Path(p).name for p in sorted(globmod.glob("video/*.mp4"))]
+        return templates.TemplateResponse(
+            request, "process.html", {"videos": videos}
         )
 
     logger.info("FastAPI app created")
