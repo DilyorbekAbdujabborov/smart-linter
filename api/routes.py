@@ -165,77 +165,92 @@ def create_app() -> FastAPI:
         from detector.rule_engine import RuleEngine
         from camera.video_reader import VideoReader
 
+        colors = {
+            "person": (0, 255, 0),
+            "bottle": (255, 0, 0),
+            "paper": (255, 255, 0),
+            "handbag": (0, 165, 255),
+            "backpack": (128, 0, 128),
+            "trash_bin": (128, 128, 128),
+        }
+
+        def process_next(frame_iter, tracker, rule_engine):
+            """Read + detect + annotate one frame (blocking CPU work).
+
+            Runs in a thread executor so a live camera never blocks the
+            server's event loop (SSE, dashboard, other clients).
+            Returns the JSON payload dict, or None at end of stream.
+            """
+            frame = next(frame_iter, None)
+            if frame is None:
+                return None
+
+            tracked = tracker.update(frame.image)
+            violations = rule_engine.process(frame.timestamp, tracked)
+
+            annotated = frame.image.copy()
+            for obj in tracked:
+                x1, y1, x2, y2 = [int(v) for v in obj.bbox]
+                color = colors.get(obj.cls.value, (255, 255, 255))
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                label = f"{obj.cls.value} {obj.confidence:.2f} #{obj.track_id}"
+                cv2.putText(annotated, label, (x1, y1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            gy = int(rule_engine._ground_y)
+            cv2.line(annotated, (0, gy), (annotated.shape[1], gy), (0, 0, 255), 1)
+            cv2.putText(annotated, "GROUND", (10, gy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+            _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            frame_b64 = base64.b64encode(buf).decode("utf-8")
+
+            dets = [
+                {
+                    "cls": obj.cls.value,
+                    "conf": round(obj.confidence, 3),
+                    "bbox": [round(v, 1) for v in obj.bbox],
+                    "track_id": obj.track_id,
+                }
+                for obj in tracked
+            ]
+
+            viol = None
+            if violations:
+                v = violations[0]
+                viol = {
+                    "track_id": v.track_id,
+                    "object_type": v.object_type.value,
+                    "confidence": round(v.confidence, 3),
+                    "timestamp": round(v.timestamp, 2),
+                }
+
+            return {
+                "frame": frame_b64,
+                "frame_index": frame.index,
+                "timestamp": round(frame.timestamp, 2),
+                "detections": dets,
+                "violation": viol,
+            }
+
         try:
+            loop = asyncio.get_event_loop()
             detector = Detector()
             tracker = Tracker(detector)
 
             with VideoReader(source) as reader:
                 rule_engine = RuleEngine(reader.height)
-                colors = {
-                    "person": (0, 255, 0),
-                    "bottle": (255, 0, 0),
-                    "paper": (255, 255, 0),
-                    "handbag": (0, 165, 255),
-                    "backpack": (128, 0, 128),
-                    "trash_bin": (128, 128, 128),
-                }
+                frame_iter = reader.frames()
 
-                for frame in reader.frames():
-                    tracked = tracker.update(frame.image)
-                    violations = rule_engine.process(frame.timestamp, tracked)
-
-                    # Draw bounding boxes on frame
-                    annotated = frame.image.copy()
-                    for obj in tracked:
-                        x1, y1, x2, y2 = [int(v) for v in obj.bbox]
-                        color = colors.get(obj.cls.value, (255, 255, 255))
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                        label = f"{obj.cls.value} {obj.confidence:.2f} #{obj.track_id}"
-                        cv2.putText(annotated, label, (x1, y1 - 8),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-                    # Draw ground line
-                    gy = int(rule_engine._ground_y)
-                    cv2.line(annotated, (0, gy), (annotated.shape[1], gy), (0, 0, 255), 1)
-                    cv2.putText(annotated, "GROUND", (10, gy - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-
-                    # Encode frame as JPEG base64
-                    _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    frame_b64 = base64.b64encode(buf).decode("utf-8")
-
-                    # Build detections list
-                    dets = [
-                        {
-                            "cls": obj.cls.value,
-                            "conf": round(obj.confidence, 3),
-                            "bbox": [round(v, 1) for v in obj.bbox],
-                            "track_id": obj.track_id,
-                        }
-                        for obj in tracked
-                    ]
-
-                    # Build violation info
-                    viol = None
-                    if violations:
-                        v = violations[0]
-                        viol = {
-                            "track_id": v.track_id,
-                            "object_type": v.object_type.value,
-                            "confidence": round(v.confidence, 3),
-                            "timestamp": round(v.timestamp, 2),
-                        }
-
-                    await websocket.send_json({
-                        "frame": frame_b64,
-                        "frame_index": frame.index,
-                        "timestamp": round(frame.timestamp, 2),
-                        "detections": dets,
-                        "violation": viol,
-                    })
-
-                    # Small sleep to not overwhelm the client
-                    await asyncio.sleep(0.03)
+                while True:
+                    payload = await loop.run_in_executor(
+                        None, process_next, frame_iter, tracker, rule_engine
+                    )
+                    if payload is None:
+                        break  # end of file / stream
+                    await websocket.send_json(payload)
+                    # Yield to the event loop so other clients get serviced.
+                    await asyncio.sleep(0.01)
 
         except WebSocketDisconnect:
             logger.info("WebSocket client disconnected")

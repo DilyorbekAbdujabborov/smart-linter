@@ -52,7 +52,11 @@ class VideoReader:
             VideoSourceError: If the source cannot be opened.
         """
         self.source = source
-        self._cap = cv2.VideoCapture(source)
+        # A bare number ("0", "1", ...) means a local webcam device index;
+        # OpenCV needs a real int for that, not the string. Anything else
+        # (file path, rtsp:// URL) is passed through untouched.
+        cap_source: str | int = int(source) if str(source).isdigit() else source
+        self._cap = cv2.VideoCapture(cap_source)
         if not self._cap.isOpened():
             raise VideoSourceError(f"Cannot open video source: {source!r}")
 

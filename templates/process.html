@@ -6,15 +6,23 @@
     <title>Real-Time Detection</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e0e0e0; min-height: 100vh; }
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f1216; color: #e0e0e0; min-height: 100vh; }
 
-        .header { background: #161822; padding: 16px 24px; border-bottom: 1px solid #2a2d3a; display: flex; align-items: center; gap: 16px; }
-        .header h1 { font-size: 20px; font-weight: 600; color: #fff; }
-        .header a { color: #6c5ce7; text-decoration: none; font-size: 14px; }
+        nav { background: #161822; padding: 0 32px; display:flex; align-items:center; gap:24px;
+              border-bottom: 1px solid #2a313c; height:56px; }
+        nav .brand { display:flex; align-items:center; gap:10px; text-decoration:none; }
+        nav .brand .dot { width:10px; height:10px; border-radius:50%; background:#2ecc71; }
+        nav .brand span { font-size:16px; font-weight:600; color:var(--txt, #e7ecf3); }
+        nav .nav-links { display:flex; gap:4px; margin-left:auto; }
+        nav .nav-links a { text-decoration:none; color:#8b95a5; font-size:14px; font-weight:500;
+                           padding:6px 14px; border-radius:6px; transition:all .15s; }
+        nav .nav-links a:hover { color:#e7ecf3; background:#1e2030; }
+        nav .nav-links a.active { color:#fff; background:#6c5ce722; }
 
-        .controls { background: #161822; padding: 16px 24px; border-bottom: 1px solid #2a2d3a; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-        select, button { background: #1e2030; color: #e0e0e0; border: 1px solid #2a2d3a; padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; }
-        select:hover, button:hover { border-color: #6c5ce7; }
+        .controls { background: #161822; padding: 16px 32px; border-bottom: 1px solid #2a313c; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        select, button, input { background: #1e2030; color: #e0e0e0; border: 1px solid #2a313c; padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; transition:border-color .15s; }
+        input { cursor: text; }
+        select:hover, button:hover, input:focus { border-color: #6c5ce7; outline: none; }
         button.start { background: #6c5ce7; color: #fff; border-color: #6c5ce7; }
         button.start:hover { background: #5a4bd1; }
         button.stop { background: #e74c3c; color: #fff; border-color: #e74c3c; }
@@ -22,7 +30,7 @@
         .status.connected { color: #2ecc71; }
         .status.error { color: #e74c3c; }
 
-        .main { display: flex; gap: 16px; padding: 16px 24px; height: calc(100vh - 130px); }
+        .main { display: flex; gap: 16px; padding: 16px 32px; height: calc(100vh - 116px); }
 
         .video-container { flex: 1; position: relative; background: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .video-container canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -30,16 +38,16 @@
 
         .sidebar { width: 320px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
 
-        .panel { background: #161822; border: 1px solid #2a2d3a; border-radius: 8px; padding: 16px; }
+        .panel { background: #161822; border: 1px solid #2a313c; border-radius: 8px; padding: 16px; }
         .panel h3 { font-size: 14px; color: #888; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0.5px; }
 
-        .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1e2030; }
+        .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2a313c; }
         .stat-row:last-child { border-bottom: none; }
         .stat-label { color: #888; font-size: 13px; }
         .stat-value { color: #fff; font-size: 13px; font-weight: 500; }
 
         .detection-list { max-height: 300px; overflow-y: auto; }
-        .detection-item { padding: 8px 0; border-bottom: 1px solid #1e2030; font-size: 13px; }
+        .detection-item { padding: 8px 0; border-bottom: 1px solid #2a313c; font-size: 13px; }
         .detection-item:last-child { border-bottom: none; }
         .det-cls { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 6px; }
         .det-cls.person { background: #2ecc71; color: #000; }
@@ -49,7 +57,7 @@
         .det-cls.backpack { background: #9b59b6; color: #fff; }
         .det-conf { color: #888; }
 
-        .violation-alert { background: rgba(231, 76, 60, 0.15); border: 1px solid #e74c3c; border-radius: 8px; padding: 16px; animation: pulse 1.5s infinite; }
+        .violation-alert { background: rgba(231, 76, 60, 0.12); border: 1px solid #e74c3c; border-radius: 8px; padding: 16px; animation: pulse 1.5s infinite; }
         .violation-alert h3 { color: #e74c3c; margin-bottom: 8px; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 
@@ -59,21 +67,34 @@
 
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #161822; }
-        ::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: #2a313c; border-radius: 3px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Real-Time Litter Detection</h1>
-        <a href="/">&larr; Dashboard</a>
-    </div>
+    <nav>
+        <a class="brand" href="/">
+            <span class="dot"></span>
+            <span>Smart Litter</span>
+        </a>
+        <div class="nav-links">
+            <a href="/">Dashboard</a>
+            <a href="/process" class="active">Live Detection</a>
+        </div>
+    </nav>
 
     <div class="controls">
+        <select id="sourceType" onchange="onSourceTypeChange()">
+            <option value="file">Video File</option>
+            <option value="webcam">Webcam</option>
+            <option value="rtsp">RTSP / IP Camera</option>
+        </select>
         <select id="videoSelect">
             {% for v in videos %}
             <option value="video/{{ v }}">{{ v }}</option>
             {% endfor %}
         </select>
+        <input id="webcamIndex" type="number" min="0" value="0" title="Webcam device index" style="display:none; width:90px;" />
+        <input id="rtspUrl" type="text" placeholder="rtsp://user:pass@host:554/stream" style="display:none; width:340px;" />
         <button class="start" id="startBtn" onclick="startDetection()">Start Detection</button>
         <button class="stop" id="stopBtn" onclick="stopDetection()" style="display:none;">Stop</button>
         <div class="status" id="status">Ready</div>
@@ -142,9 +163,27 @@
         let lastFrameTime = performance.now();
         let frameCount = 0;
 
+        function onSourceTypeChange() {
+            const type = document.getElementById('sourceType').value;
+            document.getElementById('videoSelect').style.display = type === 'file' ? '' : 'none';
+            document.getElementById('webcamIndex').style.display = type === 'webcam' ? '' : 'none';
+            document.getElementById('rtspUrl').style.display = type === 'rtsp' ? '' : 'none';
+        }
+
+        function currentSource() {
+            const type = document.getElementById('sourceType').value;
+            if (type === 'file') return document.getElementById('videoSelect').value;
+            if (type === 'webcam') return document.getElementById('webcamIndex').value || '0';
+            return document.getElementById('rtspUrl').value.trim();
+        }
+
         function startDetection() {
-            const source = document.getElementById('videoSelect').value;
-            if (!source) return;
+            const source = currentSource();
+            if (!source) {
+                document.getElementById('status').textContent = 'Enter a source first';
+                document.getElementById('status').className = 'status error';
+                return;
+            }
 
             stopDetection();
 
