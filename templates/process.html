@@ -246,16 +246,16 @@
 			</div>
 		</div>
 
+		<script src="/static/auth.js"></script>
 		<script>
-			const authToken = localStorage.getItem('access_token');
-			if (!authToken) {
-				window.location.href = '/login';
+			if (!Auth.requireAuth()) {
+				throw new Error('redirecting to login');
 			}
 			document
 				.getElementById('logoutLink')
 				.addEventListener('click', function (ev) {
 					ev.preventDefault();
-					localStorage.removeItem('access_token');
+					Auth.clearTokens();
 					window.location.href = '/login';
 				});
 
@@ -378,40 +378,51 @@
 
 				stopDetection();
 
-				const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-				ws = new WebSocket(
-					`${proto}//${location.host}/ws/process?source=${encodeURIComponent(source)}&token=${encodeURIComponent(authToken)}`
-				);
-
 				document.getElementById('startBtn').style.display = 'none';
 				document.getElementById('stopBtn').style.display = '';
 				const status = document.getElementById('status');
 				status.textContent = 'Connecting...';
 				status.className = 'ml-auto text-xs font-medium text-amber-400';
 
-				ws.onopen = () => {
-					status.textContent = 'Connected';
-					status.className = 'ml-auto text-xs font-medium text-emerald-400';
-					placeholder.style.display = 'none';
-					canvas.style.display = '';
-				};
+				// A live session can run far longer than the access token's
+				// lifetime, and the token is only checked once at WS
+				// connect -- so refresh it right before connecting to give
+				// the session the longest runway before it'd need to be
+				// restarted for a fresh token.
+				Auth.refresh()
+					.then(function () {
+						const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+						ws = new WebSocket(
+							`${proto}//${location.host}/ws/process?source=${encodeURIComponent(source)}&token=${encodeURIComponent(Auth.getAccess())}`
+						);
 
-				ws.onmessage = (evt) => {
-					const data = JSON.parse(evt.data);
-					handleFrame(data);
-				};
+						ws.onopen = () => {
+							status.textContent = 'Connected';
+							status.className = 'ml-auto text-xs font-medium text-emerald-400';
+							placeholder.style.display = 'none';
+							canvas.style.display = '';
+						};
 
-				ws.onclose = () => {
-					status.textContent = 'Disconnected';
-					status.className = 'ml-auto text-xs font-medium text-slate-500';
-					document.getElementById('startBtn').style.display = '';
-					document.getElementById('stopBtn').style.display = 'none';
-				};
+						ws.onmessage = (evt) => {
+							const data = JSON.parse(evt.data);
+							handleFrame(data);
+						};
 
-				ws.onerror = () => {
-					status.textContent = 'Error';
-					status.className = 'ml-auto text-xs font-medium text-rose-500';
-				};
+						ws.onclose = () => {
+							status.textContent = 'Disconnected';
+							status.className = 'ml-auto text-xs font-medium text-slate-500';
+							document.getElementById('startBtn').style.display = '';
+							document.getElementById('stopBtn').style.display = 'none';
+						};
+
+						ws.onerror = () => {
+							status.textContent = 'Error';
+							status.className = 'ml-auto text-xs font-medium text-rose-500';
+						};
+					})
+					.catch(function () {
+						// Auth.refresh() already redirected to /login on failure.
+					});
 			}
 
 			function stopDetection() {
