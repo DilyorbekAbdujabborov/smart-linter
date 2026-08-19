@@ -25,6 +25,11 @@ logger = get_logger(__name__)
 # How many past centroids to keep per track (enough for motion analysis).
 _MAX_HISTORY = 150
 
+# Drop a track's history once it has gone unseen for this many consecutive
+# frames -- otherwise ``_history`` grows without bound as ByteTrack hands out
+# new ids over a long-running / RTSP stream.
+_MAX_MISSING_FRAMES = 150
+
 
 class Tracker:
     """Wraps ByteTrack, yielding tracked objects per frame."""
@@ -35,6 +40,8 @@ class Tracker:
         self._history: Dict[int, Deque[Tuple[float, float]]] = defaultdict(
             lambda: deque(maxlen=_MAX_HISTORY)
         )
+        # Consecutive frames each known track has gone unseen.
+        self._missing: Dict[int, int] = defaultdict(int)
 
     def update(self, image: np.ndarray) -> List[TrackedObject]:
         """Detect + track objects in one frame.
@@ -86,4 +93,16 @@ class Tracker:
                     )
                 )
 
+        self._prune_missing(seen_ids)
         return tracked
+
+    def _prune_missing(self, seen_ids: set[int]) -> None:
+        """Drop history for tracks unseen too long; reset the counter for the rest."""
+        for track_id in list(self._history.keys()):
+            if track_id in seen_ids:
+                self._missing[track_id] = 0
+                continue
+            self._missing[track_id] += 1
+            if self._missing[track_id] > _MAX_MISSING_FRAMES:
+                del self._history[track_id]
+                del self._missing[track_id]

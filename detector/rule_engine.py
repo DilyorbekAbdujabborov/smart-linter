@@ -89,6 +89,10 @@ class RuleEngine:
         self._frame_height = frame_height
         self._ground_y = frame_height * settings.ground_y_ratio
         self._states: Dict[int, _ObjectState] = {}
+        # Last frame timestamp each track was seen, so stale entries (object
+        # left frame, track id recycled) can be dropped -- otherwise this
+        # dict grows without bound on long-running / RTSP streams.
+        self._last_seen: Dict[int, float] = {}
         logger.info(
             "RuleEngine ready (ground_y=%.0f, stationary=%.1fs, proximity=%.0fpx)",
             self._ground_y,
@@ -114,10 +118,23 @@ class RuleEngine:
 
         violations: List[Violation] = []
         for obj in trash:
+            self._last_seen[obj.track_id] = timestamp
             v = self._evaluate_object(timestamp, obj, persons, bins)
             if v is not None:
                 violations.append(v)
+        self._prune_stale(timestamp)
         return violations
+
+    def _prune_stale(self, timestamp: float) -> None:
+        """Drop state for tracks unseen for longer than ``track_ttl_seconds``."""
+        stale = [
+            track_id
+            for track_id, last_seen in self._last_seen.items()
+            if timestamp - last_seen > settings.track_ttl_seconds
+        ]
+        for track_id in stale:
+            self._states.pop(track_id, None)
+            self._last_seen.pop(track_id, None)
 
     # -- internals ----------------------------------------------------------
 
