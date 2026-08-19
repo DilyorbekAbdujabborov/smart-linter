@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from pathlib import Path
 from typing import List
 
@@ -61,6 +62,30 @@ def get_current_username(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return username
+
+
+# Loaded lazily (only when a WebSocket connects) and shared across all
+# connections in this process: YOLO weight loading takes real time, and
+# reloading it per connection was both slow and a memory multiplier under
+# concurrent viewers.
+#
+# ultralytics' ``model.track(persist=True)`` -- which the tracker calls --
+# keeps its ByteTrack state ON THE MODEL OBJECT ITSELF (``model.predictor``),
+# not on our ``Tracker`` wrapper. So sharing the model is only safe if calls
+# to it are serialized (``_detector_lock``) and each new connection resets
+# that state before it starts (below) -- otherwise concurrent viewers would
+# corrupt each other's track ids.
+_shared_detector = None
+_detector_lock = threading.Lock()
+
+
+def _get_shared_detector():
+    global _shared_detector
+    if _shared_detector is None:
+        from detector.detector import Detector
+
+        _shared_detector = Detector()
+    return _shared_detector
 
 
 def create_app() -> FastAPI:
@@ -214,7 +239,6 @@ def create_app() -> FastAPI:
         await websocket.accept()
         import base64
         import cv2
-        from detector.detector import Detector
         from detector.tracker import Tracker
         from detector.rule_engine import RuleEngine
         from camera.video_reader import VideoReader
@@ -228,6 +252,12 @@ def create_app() -> FastAPI:
             "trash_bin": (128, 128, 128),
         }
 
+        # Detection/tracking runs every Nth frame; skipped frames redraw the
+        # last known boxes so the video stays smooth without paying full
+        # inference cost every frame (tune via WS_DETECT_EVERY_N_FRAMES).
+        detect_every = max(1, settings.ws_detect_every_n_frames)
+        last_result = {"tracked": [], "violations": []}
+
         def process_next(frame_iter, tracker, rule_engine):
             """Read + detect + annotate one frame (blocking CPU work).
 
@@ -239,8 +269,18 @@ def create_app() -> FastAPI:
             if frame is None:
                 return None
 
-            tracked = tracker.update(frame.image)
-            violations = rule_engine.process(frame.timestamp, tracked)
+            if frame.index % detect_every == 0:
+                # Serialize access: the underlying YOLO model (and its
+                # persisted ByteTrack state) is shared across connections.
+                with _detector_lock:
+                    last_result["tracked"] = tracker.update(frame.image)
+                last_result["violations"] = rule_engine.process(
+                    frame.timestamp, last_result["tracked"]
+                )
+                violations = last_result["violations"]
+            else:
+                violations = []
+            tracked = last_result["tracked"]
 
             annotated = frame.image.copy()
             for obj in tracked:
@@ -289,7 +329,11 @@ def create_app() -> FastAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            detector = Detector()
+            detector = _get_shared_detector()
+            with _detector_lock:
+                # Drop any ByteTrack state left over from a previous
+                # connection so this stream starts with a clean slate.
+                detector.model.predictor = None
             tracker = Tracker(detector)
 
             with VideoReader(source) as reader:
