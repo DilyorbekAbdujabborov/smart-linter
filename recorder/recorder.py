@@ -126,7 +126,7 @@ class Recorder:
         video_path = self._events_dir / f"event_{clip_id}.mp4"
         preview_path = self._events_dir / f"event_{clip_id}.jpg"
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*settings.video_codec)
         writer = cv2.VideoWriter(
             str(video_path), fourcc, self.fps, self.frame_size
         )
