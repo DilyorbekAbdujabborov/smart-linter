@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from config import settings
-from database.models import Base, Event, Person
+from database.models import Base, BinZone, Event, Person
 from logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -224,4 +224,35 @@ def delete_person(person_id: int) -> bool:
             return False
         session.delete(person)
         logger.info("Deleted person id=%s", person_id)
+        return True
+
+
+def create_bin_zone(*, x1: float, y1: float, x2: float, y2: float) -> BinZone:
+    """Persist a manually-drawn trash-bin zone (normalized [0,1] coords)."""
+    with session_scope() as session:
+        zone = BinZone(x1=x1, y1=y1, x2=x2, y2=y2)
+        session.add(zone)
+        session.flush()
+        logger.info("Added bin zone id=%s", zone.id)
+        session.expunge(zone)
+        return zone
+
+
+def list_bin_zones() -> List[BinZone]:
+    """Return all remembered bin zones."""
+    with session_scope() as session:
+        zones = session.query(BinZone).order_by(BinZone.created_at.asc()).all()
+        for z in zones:
+            session.expunge(z)
+        return zones
+
+
+def delete_bin_zone(zone_id: int) -> bool:
+    """Delete a bin zone by id. Returns True if a row was removed."""
+    with session_scope() as session:
+        zone = session.get(BinZone, zone_id)
+        if zone is None:
+            return False
+        session.delete(zone)
+        logger.info("Deleted bin zone id=%s", zone_id)
         return True

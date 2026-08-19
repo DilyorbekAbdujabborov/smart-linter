@@ -84,14 +84,22 @@ class Violation:
 class RuleEngine:
     """Stateful evaluator turning tracked objects into violations."""
 
-    def __init__(self, frame_height: int) -> None:
+    def __init__(self, frame_height: int, frame_width: Optional[int] = None) -> None:
         """
         Args:
             frame_height: Pixel height of the video, used to derive the
                 "ground" line from ``settings.ground_y_ratio``.
+            frame_width: Pixel width of the video. Only needed if bin zones
+                will be added via :meth:`add_bin_zone` (their x-coordinates
+                are normalized against it).
         """
         self._frame_height = frame_height
+        self._frame_width = frame_width
         self._ground_y = frame_height * settings.ground_y_ratio
+        # Manually-drawn trash-bin zones (R6), keyed by their DB id so a
+        # specific zone can be removed later. Pixel bboxes, converted once
+        # from the normalized [0,1] coordinates they're stored/drawn in.
+        self._bin_zones: Dict[int, Tuple[float, float, float, float]] = {}
         self._states: Dict[int, _ObjectState] = {}
         # Last frame timestamp each track was seen, so stale entries (object
         # left frame, track id recycled) can be dropped -- otherwise this
@@ -114,6 +122,23 @@ class RuleEngine:
         ratio = max(0.0, min(1.0, ratio))
         self._ground_y = self._frame_height * ratio
         logger.info("Ground line moved: ratio=%.3f -> y=%.0f", ratio, self._ground_y)
+
+    def add_bin_zone(
+        self, zone_id: int, x1: float, y1: float, x2: float, y2: float
+    ) -> None:
+        """Add/replace a trash-bin zone (R6), in normalized [0,1] coordinates."""
+        if not self._frame_width:
+            raise ValueError("RuleEngine needs frame_width to use bin zones")
+        self._bin_zones[zone_id] = (
+            x1 * self._frame_width,
+            y1 * self._frame_height,
+            x2 * self._frame_width,
+            y2 * self._frame_height,
+        )
+
+    def remove_bin_zone(self, zone_id: int) -> None:
+        """Remove a previously added bin zone, if present."""
+        self._bin_zones.pop(zone_id, None)
 
     def process(
         self, timestamp: float, tracked: List[TrackedObject]
@@ -184,8 +209,12 @@ class RuleEngine:
         nearest_person, person_dist = self._nearest_person(obj, persons)
         near_person = person_dist <= settings.proximity_px
 
-        # R6: object inside a bin -> never a violation; reset its state.
-        if any(_point_in_box(obj.bottom_center, b.bbox) for b in bins):
+        # R6: object inside a bin (detected, or a manually-drawn zone) ->
+        # never a violation; reset its state.
+        in_bin = any(_point_in_box(obj.bottom_center, b.bbox) for b in bins) or any(
+            _point_in_box(obj.bottom_center, zone) for zone in self._bin_zones.values()
+        )
+        if in_bin:
             self._states[obj.track_id] = _ObjectState(phase=_Phase.CARRIED)
             return None
 

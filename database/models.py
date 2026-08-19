@@ -55,3 +55,23 @@ class Person(Base):
     # worth the extra dependency at this scale.
     embedding: Mapped[str] = mapped_column(Text, nullable=False)
     photo_path: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class BinZone(Base):
+    """A manually-drawn trash-bin region (R6), remembered across sessions.
+
+    Coordinates are normalized [0,1] ratios of frame width/height -- like
+    ``settings.ground_y_ratio`` -- so the same zone still lines up correctly
+    on any stream resolution.
+    """
+
+    __tablename__ = "bin_zones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    x1: Mapped[float] = mapped_column(Float, nullable=False)
+    y1: Mapped[float] = mapped_column(Float, nullable=False)
+    x2: Mapped[float] = mapped_column(Float, nullable=False)
+    y2: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
