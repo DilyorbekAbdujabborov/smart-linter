@@ -117,36 +117,20 @@
 			</div>
 		</main>
 
+		<script src="/static/auth.js"></script>
 		<script>
 			(function () {
-				const token = localStorage.getItem('access_token');
-				if (!token) {
-					window.location.href = '/login';
-					return;
-				}
+				if (!Auth.requireAuth()) return;
 
 				document
 					.getElementById('logoutLink')
 					.addEventListener('click', function (ev) {
 						ev.preventDefault();
-						localStorage.removeItem('access_token');
+						Auth.clearTokens();
 						window.location.href = '/login';
 					});
 
-				function authFetch(url, opts) {
-					opts = opts || {};
-					opts.headers = Object.assign({}, opts.headers, {
-						Authorization: 'Bearer ' + token,
-					});
-					return fetch(url, opts).then(function (resp) {
-						if (resp.status === 401) {
-							localStorage.removeItem('access_token');
-							window.location.href = '/login';
-							throw new Error('unauthenticated');
-						}
-						return resp;
-					});
-				}
+				const authFetch = Auth.authFetch;
 
 				let eventCount = 0;
 				const countEl = document.getElementById('eventCount');
@@ -283,23 +267,34 @@
 						return r.json();
 					})
 					.then(render)
+					.then(function () {
+						// Opened after /events resolves: the access token is
+						// guaranteed fresh by then (authFetch refreshes on
+						// 401), and EventSource can't be reattached with a
+						// new token mid-connection if it started stale.
+						connectStream();
+					})
 					.catch(function (e) {
 						console.error('Failed to load events', e);
 						loadingGrid.innerHTML =
 							'<div class="col-span-full text-center py-10 text-sm text-rose-400">Couldn\'t load events. Refresh to retry.</div>';
 					});
 
-				const es = new EventSource(
-					'/events/stream?token=' + encodeURIComponent(token)
-				);
-				es.onmessage = function (ev) {
+				function connectStream() {
+					const es = new EventSource(
+						'/events/stream?token=' + encodeURIComponent(Auth.getAccess())
+					);
+					es.onmessage = handleStreamMessage;
+				}
+
+				function handleStreamMessage(ev) {
 					const data = JSON.parse(ev.data);
 					eventCount++;
 					countEl.textContent = eventCount + ' event(s)';
 					emptyMsg.classList.add('hidden');
 					emptyMsg.classList.remove('flex');
 					grid.prepend(createCard(data));
-				};
+				}
 			})();
 		</script>
 	</body>

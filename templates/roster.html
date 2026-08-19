@@ -92,32 +92,18 @@
 			</section>
 		</main>
 
+		<script src="/static/auth.js"></script>
 		<script>
 			(function () {
-				const token = localStorage.getItem('access_token');
-				if (!token) {
-					window.location.href = '/login';
-					return;
-				}
+				if (!Auth.requireAuth()) return;
 
 				document.getElementById('logoutLink').addEventListener('click', function (ev) {
 					ev.preventDefault();
-					localStorage.removeItem('access_token');
+					Auth.clearTokens();
 					window.location.href = '/login';
 				});
 
-				function authFetch(url, opts) {
-					opts = opts || {};
-					opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + token });
-					return fetch(url, opts).then(function (resp) {
-						if (resp.status === 401) {
-							localStorage.removeItem('access_token');
-							window.location.href = '/login';
-							throw new Error('unauthenticated');
-						}
-						return resp;
-					});
-				}
+				const authFetch = Auth.authFetch;
 
 				const grid = document.getElementById('peopleGrid');
 				const emptyMsg = document.getElementById('emptyMsg');
