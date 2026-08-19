@@ -16,13 +16,15 @@ import os
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import EventOut, HealthOut
+from api.schemas import EventOut, HealthOut, TokenOut
+from auth.security import create_access_token, decode_access_token, verify_password
 from config import settings
 from database import database
 from logging_utils import get_logger
@@ -32,6 +34,33 @@ logger = get_logger(__name__)
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _TEMPLATES_DIR = _BASE_DIR / "templates"
 _STATIC_DIR = _BASE_DIR / "static"
+
+# ``auto_error=False``: SSE (EventSource) and the dashboard's initial page
+# load can't attach an Authorization header, so ``get_current_username``
+# also accepts the token as a ``?token=`` query param and raises itself.
+_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
+
+def get_current_username(
+    header_token: str | None = Depends(_oauth2_scheme),
+    query_token: str | None = Query(default=None, alias="token"),
+) -> str:
+    """Resolve + validate the JWT from the Authorization header or ``?token=``."""
+    raw = header_token or query_token
+    if raw is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    username = decode_access_token(raw)
+    if username is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return username
 
 
 def create_app() -> FastAPI:
@@ -61,6 +90,18 @@ def create_app() -> FastAPI:
     app.mount("/media", StaticFiles(directory=str(events_dir)), name="media")
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
+    # -- Auth -----------------------------------------------------------------
+
+    @app.post("/auth/login", response_model=TokenOut, tags=["auth"])
+    def login(form: OAuth2PasswordRequestForm = Depends()) -> TokenOut:
+        """Exchange the admin username/password for a JWT."""
+        valid = form.username == settings.admin_username and verify_password(
+            form.password, settings.admin_password_hash
+        )
+        if not valid:
+            raise HTTPException(status_code=401, detail="Incorrect username or password")
+        return TokenOut(access_token=create_access_token(subject=form.username))
+
     # -- REST API -----------------------------------------------------------
 
     @app.get("/health", response_model=HealthOut, tags=["system"])
@@ -69,14 +110,14 @@ def create_app() -> FastAPI:
         return HealthOut(status="ok", events=len(database.list_events()))
 
     @app.get("/events", response_model=List[EventOut], tags=["events"])
-    def get_events() -> List[EventOut]:
+    def get_events(username: str = Depends(get_current_username)) -> List[EventOut]:
         """List all violation events, newest first."""
         return [EventOut.model_validate(e) for e in database.list_events()]
 
     # -- Real-time SSE (must be before /events/{event_id}) -------------------
 
     @app.get("/events/stream", tags=["events"])
-    async def events_stream(request: Request):
+    async def events_stream(request: Request, username: str = Depends(get_current_username)):
         """Server-Sent Events stream: pushes new events to the client."""
         async def generate():
             last_id = 0
@@ -106,7 +147,7 @@ def create_app() -> FastAPI:
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.get("/events/{event_id}", response_model=EventOut, tags=["events"])
-    def get_event(event_id: int) -> EventOut:
+    def get_event(event_id: int, username: str = Depends(get_current_username)) -> EventOut:
         """Fetch a single event by id."""
         event = database.get_event(event_id)
         if event is None:
@@ -114,7 +155,7 @@ def create_app() -> FastAPI:
         return EventOut.model_validate(event)
 
     @app.delete("/events/{event_id}", tags=["events"])
-    def delete_event(event_id: int) -> dict:
+    def delete_event(event_id: int, username: str = Depends(get_current_username)) -> dict:
         """Delete an event and its media files."""
         event = database.get_event(event_id)
         if event is None:
@@ -131,7 +172,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/events/{event_id}/download", tags=["events"], response_class=FileResponse
     )
-    def download_event(event_id: int) -> FileResponse:
+    def download_event(event_id: int, username: str = Depends(get_current_username)) -> FileResponse:
         """Download the 10-second MP4 clip for an event."""
         event = database.get_event(event_id)
         if event is None or not os.path.exists(event.video_path):
@@ -145,7 +186,7 @@ def create_app() -> FastAPI:
     # -- Real-time WebSocket processing ------------------------------------
 
     @app.websocket("/ws/process")
-    async def ws_process(websocket: WebSocket, source: str = Query(...)):
+    async def ws_process(websocket: WebSocket, source: str = Query(...), token: str = Query(...)):
         """WebSocket endpoint: streams annotated frames from a video source.
 
         Each message sent to the client is a JSON object:
@@ -157,6 +198,12 @@ def create_app() -> FastAPI:
             "violation": {"track_id": int, "object_type": str, "confidence": float, "timestamp": float} | null
         }
         """
+        # Browsers can't set a WebSocket Authorization header, so the JWT
+        # travels as a query param instead. Validated before accept() so an
+        # unauthenticated client never gets a connection.
+        if decode_access_token(token) is None:
+            await websocket.close(code=1008)  # policy violation
+            return
         await websocket.accept()
         import base64
         import cv2
@@ -262,28 +309,22 @@ def create_app() -> FastAPI:
                 pass
 
     # -- Dashboard ----------------------------------------------------------
+    #
+    # These pages are unauthenticated shells: the JWT lives in the browser's
+    # localStorage (not a cookie), so the server can't gate the HTML response
+    # itself. Each page's JS checks for a token on load, redirects to /login
+    # if missing, and attaches it to every /events, /events/stream and
+    # /ws/process call it makes.
+
+    @app.get("/login", response_class=HTMLResponse, tags=["dashboard"])
+    def login_page(request: Request) -> HTMLResponse:
+        """Render the login page."""
+        return templates.TemplateResponse(request, "login.html", {})
 
     @app.get("/", response_class=HTMLResponse, tags=["dashboard"])
     def dashboard(request: Request) -> HTMLResponse:
-        """Render the HTML dashboard of events."""
-        events = database.list_events()
-        # Build view models: media is served from /media/<basename>.
-        view = [
-            {
-                "id": e.id,
-                "timestamp": e.timestamp,
-                "camera_id": e.camera_id,
-                "confidence": e.confidence,
-                "object_type": e.object_type,
-                "preview_url": f"/media/{os.path.basename(e.preview_image)}",
-                "video_url": f"/media/{os.path.basename(e.video_path)}",
-                "download_url": f"/events/{e.id}/download",
-            }
-            for e in events
-        ]
-        return templates.TemplateResponse(
-            request, "dashboard.html", {"events": view}
-        )
+        """Render the HTML dashboard shell; events load client-side via JWT."""
+        return templates.TemplateResponse(request, "dashboard.html", {})
 
     @app.get("/process", response_class=HTMLResponse, tags=["dashboard"])
     def process_page(request: Request) -> HTMLResponse:

@@ -30,3 +30,10 @@ class HealthOut(BaseModel):
 
     status: str
     events: int
+
+
+class TokenOut(BaseModel):
+    """JWT issued on successful login."""
+
+    access_token: str
+    token_type: str = "bearer"
