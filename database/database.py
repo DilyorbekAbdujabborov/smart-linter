@@ -12,11 +12,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, List, Optional
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from config import settings
-from database.models import Base, Event
+from database.models import Base, Event, Person
 from logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -44,9 +44,34 @@ if _is_sqlite:
 
 
 def init_db() -> None:
-    """Create tables if they do not yet exist."""
+    """Create tables if they do not yet exist, and add any missing columns."""
     Base.metadata.create_all(bind=engine)
+    _migrate_missing_columns()
     logger.info("Database initialised at %s", settings.database_url)
+
+
+def _migrate_missing_columns() -> None:
+    """Add columns introduced after a database already existed.
+
+    No Alembic in this MVP: ``create_all`` only creates missing *tables*, so
+    a lightweight ``ALTER TABLE ADD COLUMN`` here keeps older on-disk
+    databases (with existing event rows) working after a schema change,
+    instead of requiring the file to be deleted.
+    """
+    inspector = inspect(engine)
+    if "events" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("events")}
+    additions = {
+        "person_id": "INTEGER",
+        "person_name": "VARCHAR(128)",
+        "face_similarity": "FLOAT",
+    }
+    with engine.begin() as conn:
+        for column, coltype in additions.items():
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE events ADD COLUMN {column} {coltype}"))
+                logger.info("Migrated: added events.%s", column)
 
 
 @contextmanager
@@ -71,6 +96,9 @@ def create_event(
     video_path: str,
     preview_image: str,
     timestamp: Optional[datetime] = None,
+    person_id: Optional[int] = None,
+    person_name: Optional[str] = None,
+    face_similarity: Optional[float] = None,
 ) -> Event:
     """Persist a new violation event and return it."""
     with session_scope() as session:
@@ -81,6 +109,9 @@ def create_event(
             object_type=object_type,
             video_path=video_path,
             preview_image=preview_image,
+            person_id=person_id,
+            person_name=person_name,
+            face_similarity=face_similarity,
         )
         session.add(event)
         session.flush()  # populate event.id before the session closes
@@ -153,4 +184,44 @@ def delete_event(event_id: int) -> bool:
             return False
         session.delete(event)
         logger.info("Deleted event id=%s", event_id)
+        return True
+
+
+def create_person(*, name: str, embedding_json: str, photo_path: str) -> Person:
+    """Enroll a new person for face matching."""
+    with session_scope() as session:
+        person = Person(name=name, embedding=embedding_json, photo_path=photo_path)
+        session.add(person)
+        session.flush()
+        logger.info("Enrolled person id=%s (%s)", person.id, name)
+        session.expunge(person)
+        return person
+
+
+def list_people() -> List[Person]:
+    """Return all enrolled people."""
+    with session_scope() as session:
+        people = session.query(Person).order_by(Person.created_at.desc()).all()
+        for p in people:
+            session.expunge(p)
+        return people
+
+
+def get_person(person_id: int) -> Optional[Person]:
+    """Return one enrolled person by id, or None."""
+    with session_scope() as session:
+        person = session.get(Person, person_id)
+        if person is not None:
+            session.expunge(person)
+        return person
+
+
+def delete_person(person_id: int) -> bool:
+    """Delete an enrolled person by id. Returns True if a row was removed."""
+    with session_scope() as session:
+        person = session.get(Person, person_id)
+        if person is None:
+            return False
+        session.delete(person)
+        logger.info("Deleted person id=%s", person_id)
         return True
