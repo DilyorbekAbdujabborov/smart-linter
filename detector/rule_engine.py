@@ -104,6 +104,17 @@ class RuleEngine:
             settings.proximity_px,
         )
 
+    @property
+    def ground_y(self) -> float:
+        """Current ground line, in pixels from the top of the frame."""
+        return self._ground_y
+
+    def set_ground_y_ratio(self, ratio: float) -> None:
+        """Move the ground line at runtime (e.g. adjusted live from the UI)."""
+        ratio = max(0.0, min(1.0, ratio))
+        self._ground_y = self._frame_height * ratio
+        logger.info("Ground line moved: ratio=%.3f -> y=%.0f", ratio, self._ground_y)
+
     def process(
         self, timestamp: float, tracked: List[TrackedObject]
     ) -> List[Violation]:
