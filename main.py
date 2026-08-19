@@ -5,7 +5,7 @@ Two subcommands keep the concerns separate:
     python main.py process [--source PATH] [--camera-id ID]
         Run the detection pipeline over a video / RTSP source.
 
-    python main.py serve [--host H] [--port P]
+    python main.py serve [--host H] [--port P] [--workers N]
         Start the FastAPI REST API + dashboard.
 
 Both share the same configuration and database, so events written by
@@ -38,10 +38,16 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     """Start the API server."""
     import uvicorn
 
+    # >1 worker spawns separate processes, each with its own YOLO model and
+    # in-memory RuleEngine/Tracker state -- fine since every /ws/process
+    # connection is pinned to one worker for its lifetime. Useful to soak up
+    # multiple concurrent REST/dashboard clients on a multi-core box; a
+    # single live-detection stream itself is still single-process CPU work.
     uvicorn.run(
         "api.routes:app",
         host=args.host,
         port=args.port,
+        workers=args.workers,
         reload=False,
     )
     return 0
@@ -71,6 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser("serve", help="Start the REST API + dashboard")
     p_serve.add_argument("--host", default=settings.api_host)
     p_serve.add_argument("--port", type=int, default=settings.api_port)
+    p_serve.add_argument(
+        "--workers", type=int, default=1, help="Number of uvicorn worker processes"
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
     p_hash = sub.add_parser(
