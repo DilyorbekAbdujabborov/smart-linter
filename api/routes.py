@@ -366,11 +366,9 @@ def create_app() -> FastAPI:
                 cv2.putText(annotated, label, (x1, y1 - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-            gy = int(rule_engine._ground_y)
-            cv2.line(annotated, (0, gy), (annotated.shape[1], gy), (0, 0, 255), 1)
-            cv2.putText(annotated, "GROUND", (10, gy - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-
+            # The ground line is drawn client-side (so dragging it is instant
+            # and doesn't need a round trip) -- just report its current
+            # pixel position, which set_ground_y_ratio can move mid-stream.
             _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
             frame_b64 = base64.b64encode(buf).decode("utf-8")
 
@@ -400,6 +398,7 @@ def create_app() -> FastAPI:
                 "timestamp": round(frame.timestamp, 2),
                 "detections": dets,
                 "violation": viol,
+                "ground_y": round(rule_engine.ground_y, 1),
             }
 
         try:
@@ -415,15 +414,31 @@ def create_app() -> FastAPI:
                 rule_engine = RuleEngine(reader.height)
                 frame_iter = reader.frames()
 
-                while True:
-                    payload = await loop.run_in_executor(
-                        None, process_next, frame_iter, tracker, rule_engine
-                    )
-                    if payload is None:
-                        break  # end of file / stream
-                    await websocket.send_json(payload)
-                    # Yield to the event loop so other clients get serviced.
-                    await asyncio.sleep(0.01)
+                async def receive_control_messages() -> None:
+                    """Apply live UI adjustments (e.g. dragging the ground
+                    line) sent by the client, concurrently with the frame
+                    send loop below."""
+                    try:
+                        while True:
+                            msg = await websocket.receive_json()
+                            if msg.get("type") == "set_ground_y_ratio":
+                                rule_engine.set_ground_y_ratio(float(msg["value"]))
+                    except (WebSocketDisconnect, RuntimeError, ValueError, TypeError):
+                        return
+
+                receiver_task = asyncio.create_task(receive_control_messages())
+                try:
+                    while True:
+                        payload = await loop.run_in_executor(
+                            None, process_next, frame_iter, tracker, rule_engine
+                        )
+                        if payload is None:
+                            break  # end of file / stream
+                        await websocket.send_json(payload)
+                        # Yield to the event loop so other clients get serviced.
+                        await asyncio.sleep(0.01)
+                finally:
+                    receiver_task.cancel()
 
         except WebSocketDisconnect:
             logger.info("WebSocket client disconnected")
