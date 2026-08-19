@@ -75,6 +75,10 @@ class Violation:
     confidence: float
     timestamp: float               # seconds into the stream
     bbox: Tuple[float, float, float, float]
+    # Track id of the person who was carrying the object (R1/R2), if known.
+    # Lets a caller with frame access (Pipeline) look up that person's face
+    # without RuleEngine itself touching video frames.
+    owner_track_id: Optional[int] = None
 
 
 class RuleEngine:
@@ -266,6 +270,7 @@ class RuleEngine:
                     confidence=obj.confidence,
                     timestamp=timestamp,
                     bbox=obj.bbox,
+                    owner_track_id=state.owner_person_id,
                 )
             return None
 
