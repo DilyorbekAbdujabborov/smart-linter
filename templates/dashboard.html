@@ -1,160 +1,306 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Litter Detection — Events</title>
-  <style>
-    :root { --bg:#0f1216; --card:#1a1f27; --line:#2a313c; --txt:#e7ecf3; --muted:#8b95a5; --accent:#6c5ce7; --accent2:#2ecc71; }
-    * { box-sizing: border-box; margin:0; padding:0; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-           background:var(--bg); color:var(--txt); min-height:100vh; }
+<html lang="en" class="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Smart Litter Detection — Dashboard</title>
+		<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%91%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script>
+			tailwind.config = {
+				darkMode: 'class',
+				theme: {
+					extend: {
+						colors: {
+							brand: { 500: '#6c5ce7', 600: '#5b4bc4' },
+							dark: {
+								900: '#0f1216',
+								800: '#161822',
+								700: '#1e2030',
+								600: '#2a313c',
+							},
+						},
+					},
+				},
+			};
+		</script>
+	</head>
+	<body
+		class="bg-dark-900 text-slate-100 min-h-screen font-sans antialiased selection:bg-brand-500 selection:text-white"
+	>
+		<!-- Navigation -->
+		<nav
+			class="sticky top-0 z-50 bg-dark-800/80 backdrop-blur-md border-b border-dark-600 px-6 sm:px-8 h-16 flex items-center justify-between"
+		>
+			<a
+				class="flex items-center gap-3 text-lg font-bold tracking-tight hover:opacity-90 transition"
+				href="/"
+			>
+				<span class="relative flex h-3 w-3">
+					<span
+						class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"
+					></span>
+					<span
+						class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"
+					></span>
+				</span>
+				<span class="text-slate-100 tracking-tight">Smart Litter</span>
+			</a>
 
-    nav { background:#161822; padding:0 32px; display:flex; align-items:center; gap:24px;
-          border-bottom:1px solid var(--line); height:56px; }
-    nav .brand { display:flex; align-items:center; gap:10px; text-decoration:none; }
-    nav .brand .dot { width:10px; height:10px; border-radius:50%; background:var(--accent2); }
-    nav .brand span { font-size:16px; font-weight:600; color:var(--txt); }
-    nav .nav-links { display:flex; gap:4px; margin-left:auto; }
-    nav .nav-links a { text-decoration:none; color:var(--muted); font-size:14px; font-weight:500;
-                        padding:6px 14px; border-radius:6px; transition:all .15s; }
-    nav .nav-links a:hover { color:var(--txt); background:#1e2030; }
-    nav .nav-links a.active { color:#fff; background:#6c5ce722; }
-    nav .count { color:var(--muted); font-size:13px; background:#1e2030; padding:4px 10px;
-                 border-radius:999px; }
+			<div class="flex items-center gap-4 sm:gap-6">
+				<span
+					class="text-xs font-semibold px-3 py-1 rounded-full bg-dark-700 text-slate-400 border border-dark-600"
+					id="eventCount"
+					>0 event(s)</span
+				>
+				<div class="flex items-center gap-1 sm:gap-2">
+					<a
+						href="/"
+						class="text-sm font-medium px-3.5 py-1.5 rounded-lg bg-brand-500/10 text-brand-500 border border-brand-500/20 transition"
+						>Dashboard</a
+					>
+					<a
+						href="/process"
+						class="text-sm font-medium px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-dark-700 transition"
+						>Live Detection</a
+					>
+					<a
+						href="/roster"
+						class="text-sm font-medium px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-dark-700 transition"
+						>People</a
+					>
+					<a
+						href="#"
+						id="logoutLink"
+						class="text-sm font-medium px-3.5 py-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition"
+						>Logout</a
+					>
+				</div>
+			</div>
+		</nav>
 
-    main { padding:24px 32px; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px,1fr));
-            gap:20px; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
-            overflow:hidden; display:flex; flex-direction:column; transition:border-color .2s; }
-    .card:hover { border-color:var(--accent); }
-    .card video, .card img { width:100%; aspect-ratio:16/9; object-fit:cover;
-                             background:#000; display:block; }
-    .card .body { padding:14px 16px; display:flex; flex-direction:column; gap:8px; }
-    .row { display:flex; justify-content:space-between; align-items:center; }
-    .tag { background:#243; color:var(--accent2); font-size:12px; padding:2px 10px;
-           border-radius:999px; text-transform:capitalize; }
-    .meta { color:var(--muted); font-size:13px; }
-    .conf { font-variant-numeric: tabular-nums; }
-    .btn { margin-top:6px; text-align:center; text-decoration:none; color:#fff;
-           background:var(--accent); font-weight:600; font-size:14px; padding:9px;
-           border-radius:8px; transition:opacity .15s; }
-    .btn:hover { opacity:.85; }
-    .empty { color:var(--muted); text-align:center; padding:64px; }
-  </style>
-</head>
-<body>
-  <nav>
-    <a class="brand" href="/">
-      <span class="dot"></span>
-      <span>Smart Litter</span>
-    </a>
-    <span class="count" id="eventCount">0 event(s)</span>
-    <div class="nav-links">
-      <a href="/" class="active">Dashboard</a>
-      <a href="/process">Live Detection</a>
-      <a href="#" id="logoutLink">Logout</a>
-    </div>
-  </nav>
-  <main>
-    <div class="grid" id="events-grid"></div>
-    <div class="empty" id="empty-msg" style="display:none">No litter events recorded yet.</div>
-  </main>
-  <script>
-    (function() {
-      const token = localStorage.getItem('access_token');
-      if (!token) {
-        window.location.href = '/login';
-        return;
-      }
+		<!-- Main Content -->
+		<main class="max-w-7xl mx-auto px-6 sm:px-8 py-8">
+			<div
+				class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+				id="loading-grid"
+			>
+				<div
+					class="animate-pulse bg-dark-800 border border-dark-600 rounded-xl aspect-video"
+				></div>
+				<div
+					class="animate-pulse bg-dark-800 border border-dark-600 rounded-xl aspect-video hidden sm:block"
+				></div>
+				<div
+					class="animate-pulse bg-dark-800 border border-dark-600 rounded-xl aspect-video hidden lg:block"
+				></div>
+			</div>
 
-      document.getElementById('logoutLink').addEventListener('click', function (ev) {
-        ev.preventDefault();
-        localStorage.removeItem('access_token');
-        window.location.href = '/login';
-      });
+			<div
+				class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+				id="events-grid"
+			></div>
 
-      function authFetch(url, opts) {
-        opts = opts || {};
-        opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + token });
-        return fetch(url, opts).then(function (resp) {
-          if (resp.status === 401) {
-            localStorage.removeItem('access_token');
-            window.location.href = '/login';
-            throw new Error('unauthenticated');
-          }
-          return resp;
-        });
-      }
+			<div
+				class="hidden flex-col items-center justify-center py-20 text-center"
+				id="empty-msg"
+			>
+				<div
+					class="w-16 h-16 mb-4 rounded-full bg-dark-800 flex items-center justify-center text-slate-500 border border-dark-600"
+				>
+					📌
+				</div>
+				<h3 class="text-lg font-semibold text-slate-300">No events found</h3>
+				<p class="text-sm text-slate-500 mt-1">
+					No litter events recorded yet.
+				</p>
+			</div>
+		</main>
 
-      let eventCount = 0;
-      const countEl = document.getElementById('eventCount');
-      const grid = document.getElementById('events-grid');
-      const emptyMsg = document.getElementById('empty-msg');
+		<script>
+			(function () {
+				const token = localStorage.getItem('access_token');
+				if (!token) {
+					window.location.href = '/login';
+					return;
+				}
 
-      function createCard(e) {
-        const d = document.createElement('div');
-        d.className = 'card';
-        d.innerHTML =
-          '<video controls preload="metadata" poster="' + e.preview_url + '">' +
-            '<source src="' + e.video_url + '" type="video/mp4" />' +
-          '</video>' +
-          '<div class="body">' +
-            '<div class="row">' +
-              '<span class="tag">' + e.object_type + '</span>' +
-              '<span class="conf meta">' + Math.round(e.confidence * 100) + '%</span>' +
-            '</div>' +
-            '<div class="meta">📷 ' + e.camera_id + '</div>' +
-            '<div class="meta">🕒 ' + new Date(e.timestamp).toLocaleString() + '</div>' +
-            '<a class="btn" href="' + e.download_url + '">Download clip</a>' +
-          '</div>';
-        return d;
-      }
+				document
+					.getElementById('logoutLink')
+					.addEventListener('click', function (ev) {
+						ev.preventDefault();
+						localStorage.removeItem('access_token');
+						window.location.href = '/login';
+					});
 
-      function basename(path) {
-        return path.split('/').pop();
-      }
+				function authFetch(url, opts) {
+					opts = opts || {};
+					opts.headers = Object.assign({}, opts.headers, {
+						Authorization: 'Bearer ' + token,
+					});
+					return fetch(url, opts).then(function (resp) {
+						if (resp.status === 401) {
+							localStorage.removeItem('access_token');
+							window.location.href = '/login';
+							throw new Error('unauthenticated');
+						}
+						return resp;
+					});
+				}
 
-      function toView(e) {
-        return {
-          id: e.id,
-          timestamp: e.timestamp,
-          camera_id: e.camera_id,
-          confidence: e.confidence,
-          object_type: e.object_type,
-          preview_url: '/media/' + basename(e.preview_image),
-          video_url: '/media/' + basename(e.video_path),
-          download_url: '/events/' + e.id + '/download',
-        };
-      }
+				let eventCount = 0;
+				const countEl = document.getElementById('eventCount');
+				const grid = document.getElementById('events-grid');
+				const emptyMsg = document.getElementById('empty-msg');
+				const loadingGrid = document.getElementById('loading-grid');
 
-      function render(events) {
-        eventCount = events.length;
-        countEl.textContent = eventCount + ' event(s)';
-        grid.innerHTML = '';
-        if (events.length === 0) {
-          emptyMsg.style.display = '';
-          return;
-        }
-        emptyMsg.style.display = 'none';
-        events.forEach(function (e) { grid.appendChild(createCard(toView(e))); });
-      }
+				function createCard(e) {
+					const d = document.createElement('div');
+					d.className =
+						'group bg-dark-800 border border-dark-600 rounded-xl overflow-hidden shadow-lg hover:border-brand-500/50 hover:shadow-brand-500/10 transition-all duration-300 flex flex-col';
+					const personBadge = e.person_name
+						? '<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-400 border border-brand-500/20">👤 ' +
+						  e.person_name +
+						  (e.face_similarity != null
+								? ' · ' + Math.round(e.face_similarity * 100) + '%'
+								: '') +
+						  '</span>'
+						: '';
+					d.innerHTML =
+						'<div class="relative aspect-video bg-black overflow-hidden">' +
+						'<video class="w-full h-full object-cover" controls preload="metadata" poster="' +
+						e.preview_url +
+						'">' +
+						'<source src="' +
+						e.video_url +
+						'" type="video/mp4" />' +
+						'</video>' +
+						'<button type="button" data-delete class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-lg bg-black/60 text-slate-300 opacity-0 group-hover:opacity-100 hover:bg-rose-500/80 hover:text-white transition-all" title="Delete event" aria-label="Delete event">' +
+						'<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>' +
+						'</button>' +
+						'</div>' +
+						'<div class="p-4 flex flex-col gap-3 flex-1 justify-between">' +
+						'<div class="flex items-center justify-between gap-2 flex-wrap">' +
+						'<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 capitalize">' +
+						e.object_type +
+						'</span>' +
+						personBadge +
+						'<span class="text-xs font-mono font-medium text-slate-400 bg-dark-700 px-2 py-0.5 rounded ml-auto">' +
+						Math.round(e.confidence * 100) +
+						'% match</span>' +
+						'</div>' +
+						'<div class="space-y-1 text-xs text-slate-400">' +
+						'<div class="flex items-center gap-1.5">📷 <span class="font-medium text-slate-300">' +
+						e.camera_id +
+						'</span></div>' +
+						'<div class="flex items-center gap-1.5">🕒 <span>' +
+						new Date(e.timestamp).toLocaleString() +
+						'</span></div>' +
+						'</div>' +
+						'<a class="mt-2 w-full inline-flex justify-center items-center px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm" href="' +
+						e.download_url +
+						'">Download clip</a>' +
+						'</div>';
 
-      authFetch('/events')
-        .then(function (r) { return r.json(); })
-        .then(render)
-        .catch(function (e) { console.error('Failed to load events', e); });
+					const deleteBtn = d.querySelector('[data-delete]');
+					let confirmTimer = null;
+					deleteBtn.addEventListener('click', function (ev) {
+						ev.preventDefault();
+						if (!deleteBtn.dataset.armed) {
+							deleteBtn.dataset.armed = '1';
+							deleteBtn.classList.add('bg-rose-500', 'text-white');
+							deleteBtn.title = 'Click again to confirm delete';
+							deleteBtn.setAttribute('aria-label', 'Click again to confirm delete');
+							deleteBtn.innerHTML =
+								'<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>';
+							confirmTimer = setTimeout(function () {
+								delete deleteBtn.dataset.armed;
+								deleteBtn.classList.remove('bg-rose-500', 'text-white');
+								deleteBtn.title = 'Delete event';
+								deleteBtn.setAttribute('aria-label', 'Delete event');
+								deleteBtn.innerHTML =
+									'<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>';
+							}, 3000);
+							return;
+						}
+						clearTimeout(confirmTimer);
+						authFetch('/events/' + e.id, { method: 'DELETE' })
+							.then(function () {
+								d.remove();
+								eventCount = Math.max(0, eventCount - 1);
+								countEl.textContent = eventCount + ' event(s)';
+								if (eventCount === 0) {
+									emptyMsg.classList.remove('hidden');
+									emptyMsg.classList.add('flex');
+								}
+							})
+							.catch(function (err) {
+								console.error('Failed to delete event', err);
+							});
+					});
 
-      const es = new EventSource('/events/stream?token=' + encodeURIComponent(token));
-      es.onmessage = function(ev) {
-        const data = JSON.parse(ev.data);
-        eventCount++;
-        countEl.textContent = eventCount + ' event(s)';
-        emptyMsg.style.display = 'none';
-        grid.prepend(createCard(data));
-      };
-    })();
-  </script>
-</body>
+					return d;
+				}
+
+				function basename(path) {
+					return path.split('/').pop();
+				}
+
+				function toView(e) {
+					return {
+						id: e.id,
+						timestamp: e.timestamp,
+						camera_id: e.camera_id,
+						confidence: e.confidence,
+						object_type: e.object_type,
+						person_name: e.person_name,
+						face_similarity: e.face_similarity,
+						preview_url: '/media/' + basename(e.preview_image),
+						video_url: '/media/' + basename(e.video_path),
+						download_url: '/events/' + e.id + '/download',
+					};
+				}
+
+				function render(events) {
+					loadingGrid.remove();
+					eventCount = events.length;
+					countEl.textContent = eventCount + ' event(s)';
+					grid.innerHTML = '';
+					if (events.length === 0) {
+						emptyMsg.classList.remove('hidden');
+						emptyMsg.classList.add('flex');
+						return;
+					}
+					emptyMsg.classList.add('hidden');
+					emptyMsg.classList.remove('flex');
+					events.forEach(function (e) {
+						grid.appendChild(createCard(toView(e)));
+					});
+				}
+
+				authFetch('/events')
+					.then(function (r) {
+						return r.json();
+					})
+					.then(render)
+					.catch(function (e) {
+						console.error('Failed to load events', e);
+						loadingGrid.innerHTML =
+							'<div class="col-span-full text-center py-10 text-sm text-rose-400">Couldn\'t load events. Refresh to retry.</div>';
+					});
+
+				const es = new EventSource(
+					'/events/stream?token=' + encodeURIComponent(token)
+				);
+				es.onmessage = function (ev) {
+					const data = JSON.parse(ev.data);
+					eventCount++;
+					countEl.textContent = eventCount + ' event(s)';
+					emptyMsg.classList.add('hidden');
+					emptyMsg.classList.remove('flex');
+					grid.prepend(createCard(data));
+				};
+			})();
+		</script>
+	</body>
 </html>
