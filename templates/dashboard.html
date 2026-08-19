@@ -50,40 +50,46 @@
       <span class="dot"></span>
       <span>Smart Litter</span>
     </a>
-    <span class="count">{{ events|length }} event(s)</span>
+    <span class="count" id="eventCount">0 event(s)</span>
     <div class="nav-links">
       <a href="/" class="active">Dashboard</a>
       <a href="/process">Live Detection</a>
+      <a href="#" id="logoutLink">Logout</a>
     </div>
   </nav>
   <main>
-    {% if events %}
-    <div class="grid" id="events-grid">
-      {% for e in events %}
-      <div class="card">
-        <video controls preload="metadata" poster="{{ e.preview_url }}">
-          <source src="{{ e.video_url }}" type="video/mp4" />
-        </video>
-        <div class="body">
-          <div class="row">
-            <span class="tag">{{ e.object_type }}</span>
-            <span class="conf meta">{{ "%.0f"|format(e.confidence * 100) }}%</span>
-          </div>
-          <div class="meta">📷 {{ e.camera_id }}</div>
-          <div class="meta">🕒 {{ e.timestamp.strftime("%Y-%m-%d %H:%M:%S") }} UTC</div>
-          <a class="btn" href="{{ e.download_url }}">Download clip</a>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}
-    <div class="empty" id="empty-msg">No litter events recorded yet.</div>
-    {% endif %}
+    <div class="grid" id="events-grid"></div>
+    <div class="empty" id="empty-msg" style="display:none">No litter events recorded yet.</div>
   </main>
   <script>
     (function() {
-      let eventCount = {{ events|length }};
-      const countEl = document.querySelector('.count');
+      const token = localStorage.getItem('access_token');
+      if (!token) {
+        window.location.href = '/login';
+        return;
+      }
+
+      document.getElementById('logoutLink').addEventListener('click', function (ev) {
+        ev.preventDefault();
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+      });
+
+      function authFetch(url, opts) {
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + token });
+        return fetch(url, opts).then(function (resp) {
+          if (resp.status === 401) {
+            localStorage.removeItem('access_token');
+            window.location.href = '/login';
+            throw new Error('unauthenticated');
+          }
+          return resp;
+        });
+      }
+
+      let eventCount = 0;
+      const countEl = document.getElementById('eventCount');
       const grid = document.getElementById('events-grid');
       const emptyMsg = document.getElementById('empty-msg');
 
@@ -106,19 +112,47 @@
         return d;
       }
 
-      const es = new EventSource('/events/stream');
+      function basename(path) {
+        return path.split('/').pop();
+      }
+
+      function toView(e) {
+        return {
+          id: e.id,
+          timestamp: e.timestamp,
+          camera_id: e.camera_id,
+          confidence: e.confidence,
+          object_type: e.object_type,
+          preview_url: '/media/' + basename(e.preview_image),
+          video_url: '/media/' + basename(e.video_path),
+          download_url: '/events/' + e.id + '/download',
+        };
+      }
+
+      function render(events) {
+        eventCount = events.length;
+        countEl.textContent = eventCount + ' event(s)';
+        grid.innerHTML = '';
+        if (events.length === 0) {
+          emptyMsg.style.display = '';
+          return;
+        }
+        emptyMsg.style.display = 'none';
+        events.forEach(function (e) { grid.appendChild(createCard(toView(e))); });
+      }
+
+      authFetch('/events')
+        .then(function (r) { return r.json(); })
+        .then(render)
+        .catch(function (e) { console.error('Failed to load events', e); });
+
+      const es = new EventSource('/events/stream?token=' + encodeURIComponent(token));
       es.onmessage = function(ev) {
         const data = JSON.parse(ev.data);
         eventCount++;
         countEl.textContent = eventCount + ' event(s)';
-        if (emptyMsg) emptyMsg.remove();
-        if (!grid) {
-          const g = document.createElement('div');
-          g.className = 'grid';
-          g.id = 'events-grid';
-          document.querySelector('main').appendChild(g);
-        }
-        document.getElementById('events-grid').prepend(createCard(data));
+        emptyMsg.style.display = 'none';
+        grid.prepend(createCard(data));
       };
     })();
   </script>
