@@ -43,11 +43,24 @@ class Settings(BaseSettings):
     proximity_px: float = 120.0
     stationary_tolerance_px: float = 25.0
     ground_y_ratio: float = 0.30
+    # Seconds a track can go unseen before its rule-engine state is dropped
+    # (bounds memory on long-running / RTSP streams).
+    track_ttl_seconds: float = 30.0
 
     # --- Recorder -----------------------------------------------------------
     pre_event_seconds: float = 5.0
     post_event_seconds: float = 5.0
     events_dir: str = "events"
+    # FourCC codec for clip output. "mp4v" always works with stock OpenCV
+    # wheels; "avc1" (H264) is smaller/faster to decode but needs an OpenCV
+    # build with H264 support.
+    video_codec: str = "mp4v"
+
+    # --- Live WebSocket processing --------------------------------------------
+    # Run detection/tracking on every Nth frame; frames in between reuse the
+    # last result. 1 = no skipping. Raise this to trade detection latency for
+    # throughput on slow (CPU) hardware.
+    ws_detect_every_n_frames: int = 1
 
     # --- Database -----------------------------------------------------------
     database_url: str = "sqlite:///./smart_litter.db"
