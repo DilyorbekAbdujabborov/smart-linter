@@ -42,6 +42,8 @@ _COCO_TO_CLASS: Dict[str, ObjectClass] = {
     # BACKPACK group
     "backpack": ObjectClass.BACKPACK,
     "suitcase": ObjectClass.BACKPACK,
+    # TRASH_BIN (reference class, never itself a trash item)
+    "toilet": ObjectClass.TRASH_BIN,
 }
 
 
