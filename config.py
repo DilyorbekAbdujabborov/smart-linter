@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     # throughput on slow (CPU) hardware.
     ws_detect_every_n_frames: int = 1
 
+    # --- Face identification -------------------------------------------------
+    # Matches the person who dropped an item against an enrolled roster
+    # (see /people). Uses OpenCV's built-in YuNet detector + SFace
+    # recognizer -- no extra ML dependency, just two small ONNX files that
+    # auto-download into face_models_dir on first use (same pattern as the
+    # YOLO weights).
+    face_models_dir: str = "models"
+    # SFace's published cosine-similarity threshold at FAR=0.001; higher =
+    # stricter match. See github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface.
+    face_match_threshold: float = 0.363
+    people_dir: str = "people"
+
     # --- Database -----------------------------------------------------------
     database_url: str = "sqlite:///./smart_litter.db"
 

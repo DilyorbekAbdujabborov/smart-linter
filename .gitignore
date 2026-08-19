@@ -15,6 +15,10 @@ events/*.jpg
 
 # Models (auto-downloaded)
 *.pt
+models/*.onnx
+
+# Enrolled people photos
+people/
 
 # OS
 .DS_Store
