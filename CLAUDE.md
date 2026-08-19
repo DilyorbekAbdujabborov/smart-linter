@@ -179,3 +179,51 @@ Interactive docs at `/docs` (Swagger UI).
 - Custom YOLO models (edit mapping in `detector/detector.py`)
 - Docker/Kubernetes deployment
 - Action/pose/face/plate recognition (new detectors behind same interface)
+
+## Git Workflow
+
+### Commit Rules
+
+**Every change must be committed individually.** When Claude Code makes a change:
+
+1. Make the change to one file (or a logically related group of files)
+2. Stage the changed file(s) with `git add`
+3. Commit with a descriptive message following the convention below
+4. Move to the next change
+
+### Commit Message Convention
+
+```
+type(scope): short description
+
+Types:
+  feat     New feature or functionality
+  fix      Bug fix
+  docs     Documentation only (README, CLAUDE.md, ARCHITECTURE.md, etc.)
+  style    Code style changes (formatting, no logic change)
+  refactor Code restructuring (no feature change, no bug fix)
+  test     Adding or updating tests
+  chore    Build, CI, tooling, config changes
+  perf     Performance improvement
+
+Examples:
+  docs: add CLAUDE.md - main project instructions
+  feat: add handbag as trash class in ObjectClass enum
+  fix: correct ground_y_ratio threshold in rule_engine
+  refactor: extract session_scope into database module
+```
+
+### Commit Workflow for Claude Code
+
+```bash
+# 1. Make the change
+# 2. Stage
+git add <changed-file>
+
+# 3. Commit
+git commit -m "type(scope): description"
+
+# 4. Repeat for next change
+```
+
+**Never batch unrelated changes into one commit.** Each logical change gets its own commit with a clear message.
