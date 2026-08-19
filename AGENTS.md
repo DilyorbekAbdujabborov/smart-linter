@@ -133,3 +133,45 @@ pytest --cov=. --cov-report=term-missing
 1. `database/models.py` — update ORM model
 2. `database/database.py` — update CRUD
 3. `api/schemas.py` — update response model
+
+## Git Workflow
+
+### Commit Rules
+
+**Every change must be committed individually.** When making a change:
+
+1. Make the change to one file (or logically related group)
+2. Stage with `git add <file>`
+3. Commit with descriptive message
+4. Move to next change
+
+### Commit Message Convention
+
+```
+type(scope): description
+
+Types:
+  feat     New feature
+  fix      Bug fix
+  docs     Documentation only
+  style    Code style (no logic change)
+  refactor Code restructuring
+  test     Adding or updating tests
+  chore    Build, CI, tooling
+```
+
+### Example Workflow
+
+```bash
+# Change 1
+git add detector/types.py
+git commit -m "feat: add handbag as trash class"
+
+# Change 2
+git add detector/detector.py
+git commit -m "feat: add COCO mapping for handbag"
+
+# Each change gets its own commit
+```
+
+**Never batch unrelated changes into one commit.**
