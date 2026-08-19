@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-Smart Litter Detection System — Python 3.12+ computer vision MVP that detects littering from video/RTSP, records 10s clips, and serves events via REST API + web dashboard.
+Smart Litter Detection System — Python 3.12+ computer vision MVP that detects littering from video/RTSP, records 10s clips, matches the violator against an enrolled face roster, and serves events via a JWT-authenticated REST API + web dashboard.
 
 ## Quick Reference
 
@@ -11,6 +11,9 @@ Smart Litter Detection System — Python 3.12+ computer vision MVP that detects 
 ```bash
 # Activate environment first
 source .venv/bin/activate
+
+# One-time: generate the admin password hash for .env
+python main.py hash-password 'your-password'
 
 # Process a video file
 python main.py process --source video/sample.mp4 --camera-id cam-01
@@ -21,6 +24,7 @@ python main.py process --source "rtsp://user:pass@host:554/stream"
 # Start API server
 python main.py serve
 python main.py serve --port 9000
+python main.py serve --workers 4   # multi-process
 
 # Direct uvicorn
 uvicorn api.routes:app --reload
@@ -29,7 +33,9 @@ uvicorn api.routes:app --reload
 ### Tech Stack
 
 - Python 3.12+, YOLO11 (ultralytics), ByteTrack, OpenCV
-- FastAPI + Uvicorn, SQLAlchemy 2.0 (SQLite), Jinja2
+- OpenCV YuNet + SFace for face detection/recognition (no extra dependency)
+- FastAPI + Uvicorn, SQLAlchemy 2.0 (SQLite, WAL mode), Jinja2 + Tailwind (CDN)
+- PyJWT for access/refresh tokens, PBKDF2 for password hashing
 - pydantic-settings for configuration
 
 ### Code Conventions
@@ -40,45 +46,52 @@ uvicorn api.routes:app --reload
 - Docstrings on every module, class, and public method
 - `@dataclass(frozen=True)` for immutable value types
 - Context managers for database sessions
+- Delete buttons use a two-click inline confirm in the UI, never `window.confirm()` (blocks the page/automation)
 
 ### File Map
 
 | Path | Purpose |
 |------|---------|
-| `main.py` | CLI entry point (process / serve) |
-| `pipeline.py` | Orchestrates all components |
+| `main.py` | CLI entry point (process / serve / hash-password) |
+| `pipeline.py` | Orchestrates all components incl. face-id + bin zones |
 | `config.py` | pydantic-settings (single source of truth) |
 | `logging_utils.py` | Project-wide logging |
 | `camera/video_reader.py` | Frame iterator (MP4/RTSP/webcam) |
 | `detector/types.py` | ObjectClass enum, Detection, TrackedObject |
 | `detector/detector.py` | YOLO11 adapter with COCO mapping |
-| `detector/tracker.py` | ByteTrack wrapper with centroid history |
-| `detector/rule_engine.py` | 6-rule state machine (largest logic file) |
+| `detector/tracker.py` | ByteTrack wrapper, centroid history, stale-track pruning |
+| `detector/rule_engine.py` | 6-rule state machine (largest logic file); live-tunable ground line + bin zones |
+| `face/face_id.py` | YuNet detector + SFace recognizer wrapper (auto-downloads weights) |
+| `auth/security.py` | Password hashing, access/refresh JWT issue + verify |
 | `recorder/clip_buffer.py` | Rolling deque ring buffer |
-| `recorder/recorder.py` | MP4 + JPEG writer |
-| `database/models.py` | SQLAlchemy Event model |
-| `database/database.py` | Engine, session factory, CRUD |
+| `recorder/recorder.py` | MP4 (configurable codec) + JPEG writer |
+| `database/models.py` | Event, Person, BinZone SQLAlchemy models |
+| `database/database.py` | Engine (WAL), session factory, CRUD, ALTER-TABLE migration |
 | `api/schemas.py` | Pydantic response models |
-| `api/routes.py` | FastAPI app (REST, SSE, WS, HTML) |
-| `templates/dashboard.html` | Event dashboard (SSE live) |
-| `templates/process.html` | Real-time detection (WS + canvas) |
+| `api/routes.py` | FastAPI app (REST, SSE, WS, HTML, JWT auth) |
+| `static/auth.js` | Shared client token storage + refresh-on-401 fetch wrapper |
+| `templates/login.html` | Login page |
+| `templates/dashboard.html` | Event dashboard (SSE live, face-match badge, delete) |
+| `templates/process.html` | Real-time detection (WS + canvas, draggable ground line, drawable bin zones) |
+| `templates/roster.html` | Enroll/list/delete people for face matching |
 
 ### Architecture Flow
 
 ```
-Video/RTSP -> VideoReader -> Detector (YOLO11) -> Tracker (ByteTrack)
-  -> RuleEngine (6 rules) -> Recorder (10s clip) -> Database (SQLAlchemy)
-  -> API (FastAPI REST + SSE + WebSocket)
+Video/RTSP -> VideoReader -> Detector (YOLO11, shared across WS conns) -> Tracker (ByteTrack)
+  -> RuleEngine (6 rules, live ground line + bin zones) -> face/face_id.py (owner match)
+  -> Recorder (10s clip) -> Database (SQLAlchemy, WAL)
+  -> API (FastAPI REST + SSE + WebSocket, JWT auth)
 ```
 
 ### Detection Rules (All Must Pass)
 
 1. R1: Person and trash object are close (in-hand)
 2. R2: Trash object separates from person
-3. R3: Trash object moves toward ground
+3. R3: Trash object moves toward ground (below live-adjustable `ground_y_ratio`)
 4. R4: Trash object stays stationary >= N seconds
 5. R5: Person leaves the area (no pickup)
-6. R6: Trash object is NOT inside a trash bin
+6. R6: Trash object is NOT inside a trash bin — YOLO-detected `trash_bin` OR a manually-drawn, persisted bin zone
 
 State machine: CARRIED -> RELEASED -> ON_GROUND -> REPORTED
 
@@ -86,23 +99,36 @@ State machine: CARRIED -> RELEASED -> ON_GROUND -> REPORTED
 
 All settings in `.env`, accessed via `settings` singleton:
 - `VIDEO_SOURCE`, `CAMERA_ID`, `YOLO_MODEL`, `DEVICE`
-- `CONF_THRESHOLD`, `STATIONARY_SECONDS`, `PROXIMITY_PX`, `GROUND_Y_RATIO`
-- `PRE_EVENT_SECONDS`, `POST_EVENT_SECONDS`, `EVENTS_DIR`
+- `CONF_THRESHOLD`, `STATIONARY_SECONDS`, `PROXIMITY_PX`, `GROUND_Y_RATIO`, `TRACK_TTL_SECONDS`
+- `PRE_EVENT_SECONDS`, `POST_EVENT_SECONDS`, `EVENTS_DIR`, `VIDEO_CODEC`
+- `WS_DETECT_EVERY_N_FRAMES` — run detection every Nth WS frame, raise on slow CPUs
+- `FACE_MODELS_DIR`, `FACE_MATCH_THRESHOLD`, `PEOPLE_DIR`
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES`, `JWT_REFRESH_EXPIRE_MINUTES`
 - `DATABASE_URL`, `API_HOST`, `API_PORT`, `LOG_LEVEL`
 
 ### API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/auth/login` | Username/password -> access + refresh tokens |
+| POST | `/auth/refresh` | Refresh token -> new pair (rotates it) |
 | GET | `/` | HTML dashboard |
+| GET | `/login` | Login page |
 | GET | `/process` | Real-time detection page |
+| GET | `/roster` | People management page |
 | GET | `/health` | Liveness + event count |
-| GET | `/events` | List all events |
+| GET | `/events` | List events (paginated, filterable) |
 | GET | `/events/stream` | SSE live stream |
 | GET | `/events/{id}` | Get one event |
 | DELETE | `/events/{id}` | Delete event + media |
 | GET | `/events/{id}/download` | Download MP4 clip |
-| WS | `/ws/process?source=...` | Real-time annotated frames |
+| POST/GET | `/people` | Enroll / list people |
+| DELETE | `/people/{id}` | Remove person |
+| POST/GET | `/bin-zones` | Add / list remembered bin zones |
+| DELETE | `/bin-zones/{id}` | Forget a bin zone |
+| WS | `/ws/process?source=...&token=...` | Real-time annotated frames + live control messages |
+
+Everything above requires a JWT except `/health`, `/auth/*`, and the HTML page shells.
 
 ### Testing
 
@@ -125,13 +151,13 @@ pytest --cov=. --cov-report=term-missing
 2. `config.py` + `.env.example` — add threshold
 
 **Add new API endpoint:**
-1. `api/routes.py` — add route in `create_app()`
+1. `api/routes.py` — add route in `create_app()`, add `username: str = Depends(get_current_username)` unless it's meant to be public
 2. `api/schemas.py` — add Pydantic model
 3. `database/database.py` — add CRUD helper if needed
 
 **Add new database field:**
 1. `database/models.py` — update ORM model
-2. `database/database.py` — update CRUD
+2. `database/database.py` — update CRUD; add to `_migrate_missing_columns()` if it's a new column on an existing table
 3. `api/schemas.py` — update response model
 
 ## Git Workflow

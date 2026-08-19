@@ -72,14 +72,23 @@ model = settings.yolo_model
 ### Adding a New API Endpoint
 
 1. Add the route in `api/routes.py` inside `create_app()`
-2. Add/update Pydantic schemas in `api/schemas.py`
-3. Add corresponding database helper in `database/database.py` if needed
+2. Add `username: str = Depends(get_current_username)` unless the endpoint is meant to be public (like `/health`)
+3. Add/update Pydantic schemas in `api/schemas.py`
+4. Add corresponding database helper in `database/database.py` if needed
 
 ### Adding a New Database Field
 
 1. Update the ORM model in `database/models.py`
-2. Update `database.py` CRUD functions
+2. Update `database.py` CRUD functions; if it's a new column on an *existing* table, add it to `_migrate_missing_columns()` too (no Alembic — this is how older on-disk databases pick up the change)
 3. Update `api/schemas.py` response models
+
+### Adding a Delete Button in the UI
+
+Never use `window.confirm()` — it's a blocking native dialog that freezes the
+page (and breaks browser automation). Use the two-click inline confirm
+pattern already in `templates/dashboard.html` / `templates/roster.html`:
+first click arms the button (visual change + a few seconds' timeout), second
+click within that window actually deletes.
 
 ## Testing
 
