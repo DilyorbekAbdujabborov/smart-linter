@@ -73,7 +73,9 @@ class Pipeline:
         events_recorded = 0
 
         with VideoReader(self.source) as reader:
-            rule_engine = RuleEngine(frame_height=reader.height)
+            rule_engine = RuleEngine(frame_height=reader.height, frame_width=reader.width)
+            for zone in database.list_bin_zones():
+                rule_engine.add_bin_zone(zone.id, zone.x1, zone.y1, zone.x2, zone.y2)
             recorder = Recorder(
                 fps=reader.fps, frame_size=(reader.width, reader.height)
             )

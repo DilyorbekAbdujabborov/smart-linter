@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
+from api.schemas import BinZoneIn, BinZoneOut, EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
 from auth.security import (
     create_access_token,
     create_refresh_token,
@@ -245,6 +245,28 @@ def create_app() -> FastAPI:
         database.delete_person(person_id)
         return {"deleted": person_id}
 
+    # -- Bin zones (R6) ---------------------------------------------------------
+
+    @app.post("/bin-zones", response_model=BinZoneOut, tags=["bin-zones"])
+    def create_bin_zone(
+        body: BinZoneIn, username: str = Depends(get_current_username)
+    ) -> BinZoneOut:
+        """Remember a manually-drawn trash-bin zone."""
+        zone = database.create_bin_zone(x1=body.x1, y1=body.y1, x2=body.x2, y2=body.y2)
+        return BinZoneOut.model_validate(zone)
+
+    @app.get("/bin-zones", response_model=List[BinZoneOut], tags=["bin-zones"])
+    def list_bin_zones(username: str = Depends(get_current_username)) -> List[BinZoneOut]:
+        """List remembered bin zones."""
+        return [BinZoneOut.model_validate(z) for z in database.list_bin_zones()]
+
+    @app.delete("/bin-zones/{zone_id}", tags=["bin-zones"])
+    def delete_bin_zone(zone_id: int, username: str = Depends(get_current_username)) -> dict:
+        """Forget a bin zone."""
+        if not database.delete_bin_zone(zone_id):
+            raise HTTPException(status_code=404, detail="Bin zone not found")
+        return {"deleted": zone_id}
+
     # -- Real-time SSE (must be before /events/{event_id}) -------------------
 
     @app.get("/events/stream", tags=["events"])
@@ -436,19 +458,48 @@ def create_app() -> FastAPI:
             tracker = Tracker(detector)
 
             with VideoReader(source) as reader:
-                rule_engine = RuleEngine(reader.height)
+                rule_engine = RuleEngine(reader.height, reader.width)
+                zones = database.list_bin_zones()
+                for zone in zones:
+                    rule_engine.add_bin_zone(zone.id, zone.x1, zone.y1, zone.x2, zone.y2)
+                # Sent once, separately from per-frame payloads (which have
+                # no "bin_zones" key), so the client can draw the remembered
+                # zones before/alongside the first frame arriving.
+                await websocket.send_json(
+                    {
+                        "bin_zones": [
+                            {"id": z.id, "x1": z.x1, "y1": z.y1, "x2": z.x2, "y2": z.y2}
+                            for z in zones
+                        ]
+                    }
+                )
                 frame_iter = reader.frames()
 
                 async def receive_control_messages() -> None:
-                    """Apply live UI adjustments (e.g. dragging the ground
-                    line) sent by the client, concurrently with the frame
-                    send loop below."""
+                    """Apply live UI adjustments (dragging the ground line,
+                    drawing/removing a bin zone) sent by the client,
+                    concurrently with the frame send loop below. Bin zones
+                    are persisted separately over REST (POST/DELETE
+                    /bin-zones); this only mirrors that into the *running*
+                    RuleEngine so the change takes effect without a
+                    reconnect."""
                     try:
                         while True:
                             msg = await websocket.receive_json()
-                            if msg.get("type") == "set_ground_y_ratio":
+                            msg_type = msg.get("type")
+                            if msg_type == "set_ground_y_ratio":
                                 rule_engine.set_ground_y_ratio(float(msg["value"]))
-                    except (WebSocketDisconnect, RuntimeError, ValueError, TypeError):
+                            elif msg_type == "add_bin_zone":
+                                rule_engine.add_bin_zone(
+                                    int(msg["id"]),
+                                    float(msg["x1"]),
+                                    float(msg["y1"]),
+                                    float(msg["x2"]),
+                                    float(msg["y2"]),
+                                )
+                            elif msg_type == "remove_bin_zone":
+                                rule_engine.remove_bin_zone(int(msg["id"]))
+                    except (WebSocketDisconnect, RuntimeError, ValueError, TypeError, KeyError):
                         return
 
                 receiver_task = asyncio.create_task(receive_control_messages())

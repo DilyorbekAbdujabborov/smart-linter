@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EventOut(BaseModel):
@@ -38,6 +38,34 @@ class PersonOut(BaseModel):
     name: str
     created_at: datetime
     photo_path: str
+
+
+class BinZoneOut(BaseModel):
+    """API representation of a remembered trash-bin zone."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    created_at: datetime
+
+
+class BinZoneIn(BaseModel):
+    """Body for POST /bin-zones: a rectangle in normalized [0,1] coordinates."""
+
+    x1: float = Field(ge=0.0, le=1.0)
+    y1: float = Field(ge=0.0, le=1.0)
+    x2: float = Field(ge=0.0, le=1.0)
+    y2: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _check_ordering(self) -> "BinZoneIn":
+        if self.x2 <= self.x1 or self.y2 <= self.y1:
+            raise ValueError("x2 must be > x1 and y2 must be > y1")
+        return self
 
 
 class HealthOut(BaseModel):
