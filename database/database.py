@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, List, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from config import settings
@@ -21,15 +21,26 @@ from logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+_is_sqlite = settings.database_url.startswith("sqlite")
+
 # ``check_same_thread`` is a SQLite-only concern: the API (FastAPI) and the
 # pipeline may touch the DB from different threads. Harmless for other engines
 # because we only pass it when the URL is SQLite.
-_connect_args = (
-    {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-)
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
 
 engine = create_engine(settings.database_url, connect_args=_connect_args, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+if _is_sqlite:
+    # WAL lets readers (API) and the writer (pipeline) hit the DB concurrently
+    # without lock contention -- the default rollback-journal mode serializes
+    # all access and stalls one side under concurrent read+write.
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 def init_db() -> None:
@@ -79,13 +90,50 @@ def create_event(
         return event
 
 
-def list_events() -> List[Event]:
-    """Return all events, newest first."""
+def list_events(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    camera_id: Optional[str] = None,
+    object_type: Optional[str] = None,
+) -> List[Event]:
+    """Return events newest-first, paginated and optionally filtered."""
     with session_scope() as session:
-        events = session.query(Event).order_by(Event.timestamp.desc()).all()
+        query = session.query(Event)
+        if camera_id is not None:
+            query = query.filter(Event.camera_id == camera_id)
+        if object_type is not None:
+            query = query.filter(Event.object_type == object_type)
+        events = (
+            query.order_by(Event.timestamp.desc()).offset(offset).limit(limit).all()
+        )
         for e in events:
             session.expunge(e)
         return events
+
+
+def list_events_since(last_id: int) -> List[Event]:
+    """Return events with id > ``last_id``, oldest first (for SSE polling).
+
+    Filters in SQL on the indexed primary key instead of fetching the whole
+    table every poll.
+    """
+    with session_scope() as session:
+        events = (
+            session.query(Event)
+            .filter(Event.id > last_id)
+            .order_by(Event.id.asc())
+            .all()
+        )
+        for e in events:
+            session.expunge(e)
+        return events
+
+
+def count_events() -> int:
+    """Return the total number of stored events."""
+    with session_scope() as session:
+        return session.query(Event).count()
 
 
 def get_event(event_id: int) -> Optional[Event]:

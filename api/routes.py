@@ -107,12 +107,21 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthOut, tags=["system"])
     def health() -> HealthOut:
         """Liveness probe + event count."""
-        return HealthOut(status="ok", events=len(database.list_events()))
+        return HealthOut(status="ok", events=database.count_events())
 
     @app.get("/events", response_model=List[EventOut], tags=["events"])
-    def get_events(username: str = Depends(get_current_username)) -> List[EventOut]:
-        """List all violation events, newest first."""
-        return [EventOut.model_validate(e) for e in database.list_events()]
+    def get_events(
+        username: str = Depends(get_current_username),
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        camera_id: str | None = Query(default=None),
+        object_type: str | None = Query(default=None),
+    ) -> List[EventOut]:
+        """List violation events, newest first, paginated and filterable."""
+        events = database.list_events(
+            limit=limit, offset=offset, camera_id=camera_id, object_type=object_type
+        )
+        return [EventOut.model_validate(e) for e in events]
 
     # -- Real-time SSE (must be before /events/{event_id}) -------------------
 
@@ -120,28 +129,26 @@ def create_app() -> FastAPI:
     async def events_stream(request: Request, username: str = Depends(get_current_username)):
         """Server-Sent Events stream: pushes new events to the client."""
         async def generate():
-            last_id = 0
-            events = database.list_events()
-            if events:
-                last_id = max(e.id for e in events)
+            latest = database.list_events(limit=1)
+            last_id = latest[0].id if latest else 0
             while True:
                 if await request.is_disconnected():
                     break
-                current_events = database.list_events()
-                for e in current_events:
-                    if e.id > last_id:
-                        payload = json.dumps({
-                            "id": e.id,
-                            "timestamp": e.timestamp.isoformat(),
-                            "camera_id": e.camera_id,
-                            "confidence": e.confidence,
-                            "object_type": e.object_type,
-                            "preview_url": f"/media/{os.path.basename(e.preview_image)}",
-                            "video_url": f"/media/{os.path.basename(e.video_path)}",
-                            "download_url": f"/events/{e.id}/download",
-                        })
-                        yield f"data: {payload}\n\n"
-                        last_id = e.id
+                # Indexed id-range query instead of re-fetching every event
+                # each poll -- cheap even with a large event history.
+                for e in database.list_events_since(last_id):
+                    payload = json.dumps({
+                        "id": e.id,
+                        "timestamp": e.timestamp.isoformat(),
+                        "camera_id": e.camera_id,
+                        "confidence": e.confidence,
+                        "object_type": e.object_type,
+                        "preview_url": f"/media/{os.path.basename(e.preview_image)}",
+                        "video_url": f"/media/{os.path.basename(e.video_path)}",
+                        "download_url": f"/events/{e.id}/download",
+                    })
+                    yield f"data: {payload}\n\n"
+                    last_id = e.id
                 await asyncio.sleep(2)
 
         return StreamingResponse(generate(), media_type="text/event-stream")
