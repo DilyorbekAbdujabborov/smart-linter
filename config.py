@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # --- Logging ------------------------------------------------------------
     log_level: str = "INFO"
 
+    # --- Auth -----------------------------------------------------------------
+    # Single-admin JWT auth (no user table -- this is an MVP, not multi-tenant).
+    # Generate a hash with: python main.py hash-password <password>
+    admin_username: str = "admin"
+    admin_password_hash: str = ""
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

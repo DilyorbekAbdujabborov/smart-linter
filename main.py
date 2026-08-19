@@ -47,6 +47,14 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_hash_password(args: argparse.Namespace) -> int:
+    """Hash a password for ``ADMIN_PASSWORD_HASH`` in ``.env``."""
+    from auth.security import hash_password
+
+    print(hash_password(args.password))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Smart Litter Detection System")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -64,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default=settings.api_host)
     p_serve.add_argument("--port", type=int, default=settings.api_port)
     p_serve.set_defaults(func=_cmd_serve)
+
+    p_hash = sub.add_parser(
+        "hash-password", help="Hash a password for ADMIN_PASSWORD_HASH in .env"
+    )
+    p_hash.add_argument("password", help="Plaintext password to hash")
+    p_hash.set_defaults(func=_cmd_hash_password)
 
     return parser
 
