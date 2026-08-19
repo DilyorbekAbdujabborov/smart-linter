@@ -476,6 +476,11 @@ def create_app() -> FastAPI:
             request, "process.html", {"videos": videos}
         )
 
+    @app.get("/roster", response_class=HTMLResponse, tags=["dashboard"])
+    def roster_page(request: Request) -> HTMLResponse:
+        """Render the enrolled-people (face-id roster) management page."""
+        return templates.TemplateResponse(request, "roster.html", {})
+
     logger.info("FastAPI app created")
     return app
 
