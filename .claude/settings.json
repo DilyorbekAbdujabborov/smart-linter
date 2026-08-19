@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py process*)",
+      "Bash(python main.py serve*)",
+      "Bash(uvicorn*)",
+      "Bash(pip install*)",
+      "Bash(pip list*)",
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(ls*)",
+      "Bash(find . -name *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(git push --force*)",
+      "Bash(pip install --break-system-packages*)"
+    ]
+  }
+}
