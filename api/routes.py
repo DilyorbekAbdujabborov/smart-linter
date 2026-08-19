@@ -17,14 +17,14 @@ import threading
 from pathlib import Path
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import EventOut, HealthOut, TokenOut
+from api.schemas import EventOut, HealthOut, PersonOut, TokenOut
 from auth.security import create_access_token, decode_access_token, verify_password
 from config import settings
 from database import database
@@ -88,6 +88,21 @@ def _get_shared_detector():
     return _shared_detector
 
 
+# Same lazy-singleton pattern for face enrollment: loaded on first POST
+# /people call, not at server startup, so the API stays lightweight when
+# face id is never used.
+_shared_face_identifier = None
+
+
+def _get_face_identifier():
+    global _shared_face_identifier
+    if _shared_face_identifier is None:
+        from face.face_id import FaceIdentifier
+
+        _shared_face_identifier = FaceIdentifier()
+    return _shared_face_identifier
+
+
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
     app = FastAPI(
@@ -112,8 +127,11 @@ def create_app() -> FastAPI:
     events_dir = Path(settings.events_dir)
     events_dir.mkdir(parents=True, exist_ok=True)
     _STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    people_dir = Path(settings.people_dir)
+    people_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/media", StaticFiles(directory=str(events_dir)), name="media")
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    app.mount("/people-media", StaticFiles(directory=str(people_dir)), name="people-media")
 
     # -- Auth -----------------------------------------------------------------
 
@@ -148,6 +166,60 @@ def create_app() -> FastAPI:
         )
         return [EventOut.model_validate(e) for e in events]
 
+    # -- People (face-id roster) ----------------------------------------------
+
+    @app.post("/people", response_model=PersonOut, tags=["people"])
+    async def enroll_person(
+        username: str = Depends(get_current_username),
+        name: str = Form(...),
+        file: UploadFile = File(...),
+    ) -> PersonOut:
+        """Enroll a person for face matching from one reference photo."""
+        import uuid
+
+        import cv2
+        import numpy as np
+
+        from face.face_id import embedding_to_json
+
+        raw = await file.read()
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Could not decode image")
+
+        detected = _get_face_identifier().detect_and_embed(image)
+        if detected is None:
+            raise HTTPException(status_code=400, detail="No face detected in photo")
+        embedding, _bbox = detected
+
+        photo_path = people_dir / f"{uuid.uuid4().hex[:12]}.jpg"
+        cv2.imwrite(str(photo_path), image)
+
+        person = database.create_person(
+            name=name,
+            embedding_json=embedding_to_json(embedding),
+            photo_path=str(photo_path),
+        )
+        return PersonOut.model_validate(person)
+
+    @app.get("/people", response_model=List[PersonOut], tags=["people"])
+    def list_people(username: str = Depends(get_current_username)) -> List[PersonOut]:
+        """List enrolled people."""
+        return [PersonOut.model_validate(p) for p in database.list_people()]
+
+    @app.delete("/people/{person_id}", tags=["people"])
+    def delete_person(person_id: int, username: str = Depends(get_current_username)) -> dict:
+        """Remove an enrolled person."""
+        person = database.get_person(person_id)
+        if person is None:
+            raise HTTPException(status_code=404, detail="Person not found")
+        try:
+            os.remove(person.photo_path)
+        except OSError:
+            logger.warning("Could not remove person photo %s", person.photo_path)
+        database.delete_person(person_id)
+        return {"deleted": person_id}
+
     # -- Real-time SSE (must be before /events/{event_id}) -------------------
 
     @app.get("/events/stream", tags=["events"])
@@ -171,6 +243,9 @@ def create_app() -> FastAPI:
                         "preview_url": f"/media/{os.path.basename(e.preview_image)}",
                         "video_url": f"/media/{os.path.basename(e.video_path)}",
                         "download_url": f"/events/{e.id}/download",
+                        "person_id": e.person_id,
+                        "person_name": e.person_name,
+                        "face_similarity": e.face_similarity,
                     })
                     yield f"data: {payload}\n\n"
                     last_id = e.id
