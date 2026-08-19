@@ -116,6 +116,14 @@
 			>
 				Stop
 			</button>
+			<button
+				id="addZoneBtn"
+				onclick="toggleDrawZone()"
+				title="Draw a rectangle over a trash bin so items dropped inside it are never flagged"
+				class="bg-dark-900 border border-dark-600 hover:border-cyan-500/50 text-slate-300 text-xs font-semibold px-4 py-2 rounded-lg transition"
+			>
+				+ Bin Zone
+			</button>
 
 			<div class="ml-auto text-xs font-medium text-slate-500" id="status">
 				Ready
@@ -241,6 +249,11 @@
 							<span class="w-3 h-0.5 bg-rose-500 shrink-0"></span> Ground Line
 							<span class="text-slate-600">(drag on canvas to adjust)</span>
 						</div>
+						<div class="flex items-center gap-2">
+							<span class="w-3 h-3 rounded border-2 border-cyan-400 shrink-0"></span>
+							Bin Zone
+							<span class="text-slate-600">(+ Bin Zone, then drag)</span>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -308,12 +321,101 @@
 				ctx.restore();
 			}
 
+			// Bin zones (R6): rectangles remembered server-side (POST/DELETE
+			// /bin-zones) and mirrored live into the running RuleEngine over
+			// the same WebSocket the ground line uses.
+			let binZones = []; // [{id, x1, y1, x2, y2}], normalized [0,1]
+			let drawingZone = false;
+			let zoneDraft = null; // {x1,y1,x2,y2} in canvas-internal px, while dragging
+
+			function toggleDrawZone() {
+				drawingZone = !drawingZone;
+				const btn = document.getElementById('addZoneBtn');
+				if (drawingZone) {
+					btn.textContent = 'Drag on canvas…';
+					btn.classList.add('border-cyan-500', 'text-cyan-400');
+					canvas.style.cursor = 'crosshair';
+				} else {
+					btn.textContent = '+ Bin Zone';
+					btn.classList.remove('border-cyan-500', 'text-cyan-400');
+					canvas.style.cursor = 'default';
+					zoneDraft = null;
+				}
+			}
+
+			function drawBinZones() {
+				ctx.save();
+				ctx.strokeStyle = '#22d3ee';
+				ctx.lineWidth = 2;
+				ctx.font = '600 12px system-ui, sans-serif';
+				ctx.fillStyle = '#22d3ee';
+				binZones.forEach(function (z) {
+					const x1 = z.x1 * canvas.width,
+						y1 = z.y1 * canvas.height;
+					const x2 = z.x2 * canvas.width,
+						y2 = z.y2 * canvas.height;
+					ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+					ctx.fillText('BIN', x1 + 4, y1 + 14);
+				});
+				if (zoneDraft) {
+					ctx.setLineDash([5, 4]);
+					ctx.strokeRect(
+						zoneDraft.x1,
+						zoneDraft.y1,
+						zoneDraft.x2 - zoneDraft.x1,
+						zoneDraft.y2 - zoneDraft.y1
+					);
+					ctx.setLineDash([]);
+				}
+				ctx.restore();
+			}
+
+			function zoneAt(p) {
+				for (let i = binZones.length - 1; i >= 0; i--) {
+					const z = binZones[i];
+					const x1 = z.x1 * canvas.width,
+						y1 = z.y1 * canvas.height;
+					const x2 = z.x2 * canvas.width,
+						y2 = z.y2 * canvas.height;
+					if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) return z;
+				}
+				return null;
+			}
+
+			function removeZone(zone) {
+				Auth.authFetch('/bin-zones/' + zone.id, { method: 'DELETE' })
+					.then(function () {
+						binZones = binZones.filter(function (z) {
+							return z.id !== zone.id;
+						});
+						redrawCanvas();
+						if (ws && ws.readyState === WebSocket.OPEN) {
+							ws.send(JSON.stringify({ type: 'remove_bin_zone', id: zone.id }));
+						}
+					})
+					.catch(function (err) {
+						console.error('Failed to remove bin zone', err);
+					});
+			}
+
 			function redrawCanvas() {
 				if (lastImg) ctx.drawImage(lastImg, 0, 0, canvas.width, canvas.height);
+				drawBinZones();
 				drawGroundLine();
 			}
 
+			canvas.addEventListener('dblclick', (evt) => {
+				if (drawingZone) return;
+				const hitZone = zoneAt(canvasPoint(evt));
+				if (hitZone) removeZone(hitZone);
+			});
+
 			canvas.addEventListener('mousedown', (evt) => {
+				if (drawingZone) {
+					const p = canvasPoint(evt);
+					zoneDraft = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+					return;
+				}
 				if (groundY == null) return;
 				const p = canvasPoint(evt);
 				if (Math.abs(p.y - groundY) <= groundHitTolerance()) {
@@ -329,12 +431,23 @@
 					Math.abs(p.y - groundY) <= groundHitTolerance() ? 'ns-resize' : 'default';
 			});
 			window.addEventListener('mousemove', (evt) => {
+				if (zoneDraft) {
+					const p = canvasPoint(evt);
+					zoneDraft.x2 = p.x;
+					zoneDraft.y2 = p.y;
+					redrawCanvas();
+					return;
+				}
 				if (!draggingGround) return;
 				const p = canvasPoint(evt);
 				groundY = Math.max(0, Math.min(canvas.height, p.y));
 				redrawCanvas();
 			});
 			window.addEventListener('mouseup', () => {
+				if (zoneDraft) {
+					finishZoneDraft();
+					return;
+				}
 				if (!draggingGround) return;
 				draggingGround = false;
 				canvas.style.cursor = 'default';
@@ -347,6 +460,50 @@
 					);
 				}
 			});
+
+			function finishZoneDraft() {
+				const x1 = Math.max(0, Math.min(zoneDraft.x1, zoneDraft.x2));
+				const y1 = Math.max(0, Math.min(zoneDraft.y1, zoneDraft.y2));
+				const x2 = Math.min(canvas.width, Math.max(zoneDraft.x1, zoneDraft.x2));
+				const y2 = Math.min(canvas.height, Math.max(zoneDraft.y1, zoneDraft.y2));
+				zoneDraft = null;
+
+				const MIN_PX = 12; // ignore accidental clicks/tiny drags
+				if (x2 - x1 < MIN_PX || y2 - y1 < MIN_PX) {
+					redrawCanvas();
+					toggleDrawZone();
+					return;
+				}
+
+				Auth.authFetch('/bin-zones', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						x1: x1 / canvas.width,
+						y1: y1 / canvas.height,
+						x2: x2 / canvas.width,
+						y2: y2 / canvas.height,
+					}),
+				})
+					.then(function (r) {
+						return r.json();
+					})
+					.then(function (zone) {
+						binZones.push(zone);
+						redrawCanvas();
+						if (ws && ws.readyState === WebSocket.OPEN) {
+							ws.send(
+								JSON.stringify(Object.assign({ type: 'add_bin_zone' }, zone))
+							);
+						}
+					})
+					.catch(function (err) {
+						console.error('Failed to save bin zone', err);
+						redrawCanvas();
+					});
+
+				toggleDrawZone(); // exit draw mode after one rectangle
+			}
 
 			function onSourceTypeChange() {
 				const type = document.getElementById('sourceType').value;
@@ -405,6 +562,11 @@
 
 						ws.onmessage = (evt) => {
 							const data = JSON.parse(evt.data);
+							if (data.bin_zones) {
+								binZones = data.bin_zones;
+								redrawCanvas();
+								return;
+							}
 							handleFrame(data);
 						};
 
@@ -442,6 +604,8 @@
 				lastImg = null;
 				groundY = null;
 				draggingGround = false;
+				binZones = [];
+				if (drawingZone) toggleDrawZone();
 			}
 
 			function handleFrame(data) {
