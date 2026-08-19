@@ -7,6 +7,20 @@ Smart Litter Detection System — an MVP computer vision application that detect
 **Language:** Python 3.12+
 **Status:** MVP / Proof of Concept
 
+## Recommended Reading Order
+
+Read these files in order to understand the project quickly:
+
+1. **`CLAUDE.md`** — this file (you are here)
+2. **`main.py`** — CLI entry point, two subcommands: `process` and `serve`
+3. **`config.py`** — all settings in one place, pydantic-settings singleton
+4. **`pipeline.py`** — orchestrator, shows how all components connect
+5. **`detector/types.py`** — domain types (ObjectClass, Detection, TrackedObject)
+6. **`detector/rule_engine.py`** — the core logic: 6-rule state machine
+7. **`api/routes.py`** — REST API, SSE, WebSocket, dashboard
+
+After reading these 7 files you will understand the full system.
+
 ## Tech Stack
 
 | Layer | Technology |
