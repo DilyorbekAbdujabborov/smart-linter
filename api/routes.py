@@ -24,8 +24,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import EventOut, HealthOut, PersonOut, TokenOut
-from auth.security import create_access_token, decode_access_token, verify_password
+from api.schemas import EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
+from auth.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_access_token,
+    decode_refresh_token,
+    verify_password,
+)
 from config import settings
 from database import database
 from logging_utils import get_logger
@@ -137,13 +143,32 @@ def create_app() -> FastAPI:
 
     @app.post("/auth/login", response_model=TokenOut, tags=["auth"])
     def login(form: OAuth2PasswordRequestForm = Depends()) -> TokenOut:
-        """Exchange the admin username/password for a JWT."""
+        """Exchange the admin username/password for an access + refresh token pair."""
         valid = form.username == settings.admin_username and verify_password(
             form.password, settings.admin_password_hash
         )
         if not valid:
             raise HTTPException(status_code=401, detail="Incorrect username or password")
-        return TokenOut(access_token=create_access_token(subject=form.username))
+        return TokenOut(
+            access_token=create_access_token(subject=form.username),
+            refresh_token=create_refresh_token(subject=form.username),
+        )
+
+    @app.post("/auth/refresh", response_model=TokenOut, tags=["auth"])
+    def refresh(body: RefreshIn) -> TokenOut:
+        """Exchange a still-valid refresh token for a new access + refresh pair.
+
+        Rotates the refresh token too (issues a new one each call) so a
+        leaked refresh token has a shrinking window of usefulness instead of
+        working for its full lifetime regardless of how often it's used.
+        """
+        username = decode_refresh_token(body.refresh_token)
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+        return TokenOut(
+            access_token=create_access_token(subject=username),
+            refresh_token=create_refresh_token(subject=username),
+        )
 
     # -- REST API -----------------------------------------------------------
 

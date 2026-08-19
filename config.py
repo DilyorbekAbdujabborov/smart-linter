@@ -91,7 +91,12 @@ class Settings(BaseSettings):
     admin_password_hash: str = ""
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60
+    # Short-lived: safe to keep tight since the refresh token below renews it
+    # without another login.
+    jwt_expire_minutes: int = 30
+    # Long-lived: exchanged at /auth/refresh for a new access token. Default
+    # 7 days.
+    jwt_refresh_expire_minutes: int = 10_080
 
 
 @lru_cache

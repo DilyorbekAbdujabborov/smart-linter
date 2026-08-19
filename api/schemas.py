@@ -48,7 +48,14 @@ class HealthOut(BaseModel):
 
 
 class TokenOut(BaseModel):
-    """JWT issued on successful login."""
+    """JWT pair issued on login or refresh."""
 
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshIn(BaseModel):
+    """Body for POST /auth/refresh."""
+
+    refresh_token: str
