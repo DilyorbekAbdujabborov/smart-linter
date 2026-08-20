@@ -2,6 +2,22 @@
 
 All notable changes to the Smart Litter Detection System will be documented in this file.
 
+## [0.2.1] - 2026-08-20
+
+### Added
+
+- **Performance tuning:** `IMGSZ` (inference image size, default 480) and `TORCH_NUM_THREADS` (torch thread count, default 0=auto) config options for CPU throughput optimization. Both `Detector` and `Tracker` now share the same `IMGSZ` value.
+- **Project review document** (`REVIEW.md`).
+
+### Fixed
+
+- **Auth refresh robustness:** `process.html` now skips the `/auth/refresh` call if the current access token is still valid, preventing failures after server restarts with a new `JWT_SECRET`.
+- **WS 1008 auto-retry:** WebSocket close code 1008 (bad/expired token) now triggers an automatic token refresh + reconnect before showing disconnected state.
+- **Refresh response validation:** `auth.js` validates that `/auth/refresh` returns an `access_token` before overwriting `localStorage`, preventing silent auth corruption.
+- **Auth error UI:** Failed authentication now shows a clear status message and resets button states instead of leaving the UI stuck.
+- **Tracker imgsz:** `ByteTrack.track()` now receives the configured `imgsz` for consistent inference resolution between detector and tracker.
+- **SQLite WAL artifacts:** `smart_litter.db-shm` and `smart_litter.db-wal` are now properly gitignored and removed from the index.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
