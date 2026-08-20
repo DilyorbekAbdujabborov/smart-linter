@@ -39,7 +39,7 @@
 	let refreshing = null;
 	function doRefresh() {
 		if (refreshing) return refreshing;
-		const rt = getRefresh();
+		var rt = getRefresh();
 		if (!rt) {
 			toLogin();
 			return Promise.reject(new Error('no refresh token'));
@@ -50,16 +50,22 @@
 			body: JSON.stringify({ refresh_token: rt }),
 		})
 			.then(function (resp) {
-				if (!resp.ok) throw new Error('refresh failed');
+				if (!resp.ok) throw new Error('refresh failed (HTTP ' + resp.status + ')');
 				return resp.json();
 			})
 			.then(function (data) {
+				// Validate the response has the expected fields before
+				// clobbering localStorage with undefined values.
+				if (!data || !data.access_token) {
+					throw new Error('refresh returned no access_token');
+				}
 				setTokens(data.access_token, data.refresh_token);
 				refreshing = null;
 				return data.access_token;
 			})
 			.catch(function (err) {
 				refreshing = null;
+				console.error('[auth] refresh failed:', err.message);
 				toLogin();
 				throw err;
 			});

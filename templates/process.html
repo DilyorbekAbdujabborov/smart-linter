@@ -546,22 +546,43 @@
 				// connect -- so refresh it right before connecting to give
 				// the session the longest runway before it'd need to be
 				// restarted for a fresh token.
-				Auth.refresh()
+				//
+				// If the access token is still valid, skip the refresh
+				// call entirely — it's unnecessary and can fail if the
+				// refresh token was issued under a different JWT_SECRET
+				// (e.g. after server restart with a new .env).
+				var refreshPromise;
+				var currentAccess = Auth.getAccess();
+				if (currentAccess) {
+					// Try connecting with the current token first; only
+					// refresh if it's actually expired (server returns
+					// 1008 on the WebSocket).
+					refreshPromise = Promise.resolve();
+				} else {
+					refreshPromise = Auth.refresh();
+				}
+
+				refreshPromise
 					.then(function () {
-						const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+						var token = Auth.getAccess();
+						if (!token) {
+							Auth.toLogin();
+							return;
+						}
+						var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 						ws = new WebSocket(
-							`${proto}//${location.host}/ws/process?source=${encodeURIComponent(source)}&token=${encodeURIComponent(Auth.getAccess())}`
+							proto + '//' + location.host + '/ws/process?source=' + encodeURIComponent(source) + '&token=' + encodeURIComponent(token)
 						);
 
-						ws.onopen = () => {
+						ws.onopen = function () {
 							status.textContent = 'Connected';
 							status.className = 'ml-auto text-xs font-medium text-emerald-400';
 							placeholder.style.display = 'none';
 							canvas.style.display = '';
 						};
 
-						ws.onmessage = (evt) => {
-							const data = JSON.parse(evt.data);
+						ws.onmessage = function (evt) {
+							var data = JSON.parse(evt.data);
 							if (data.bin_zones) {
 								binZones = data.bin_zones;
 								redrawCanvas();
@@ -570,20 +591,45 @@
 							handleFrame(data);
 						};
 
-						ws.onclose = () => {
+						ws.onclose = function (e) {
+							// Code 1008 = policy violation (bad/expired token).
+							// Try one refresh + reconnect cycle before giving up.
+							if (e.code === 1008 && !startDetection._retried1008) {
+								startDetection._retried1008 = true;
+								status.textContent = 'Refreshing token…';
+								status.className = 'ml-auto text-xs font-medium text-amber-400';
+								Auth.refresh()
+									.then(function () {
+										startDetection._retried1008 = false;
+										// Re-enter with a fresh token.
+										setTimeout(startDetection, 50);
+									})
+									.catch(function () {
+										startDetection._retried1008 = false;
+										// toLogin() already called by doRefresh.
+									});
+								return;
+							}
 							status.textContent = 'Disconnected';
 							status.className = 'ml-auto text-xs font-medium text-slate-500';
 							document.getElementById('startBtn').style.display = '';
 							document.getElementById('stopBtn').style.display = 'none';
+							startDetection._retried1008 = false;
 						};
 
-						ws.onerror = () => {
+						ws.onerror = function () {
 							status.textContent = 'Error';
 							status.className = 'ml-auto text-xs font-medium text-rose-500';
 						};
 					})
-					.catch(function () {
+					.catch(function (err) {
 						// Auth.refresh() already redirected to /login on failure.
+						// Reset the UI so the user doesn't see a stuck state.
+						document.getElementById('startBtn').style.display = '';
+						document.getElementById('stopBtn').style.display = 'none';
+						status.textContent = 'Authentication failed';
+						status.className = 'ml-auto text-xs font-medium text-rose-500';
+						startDetection._retried1008 = false;
 					});
 			}
 
