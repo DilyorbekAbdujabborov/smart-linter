@@ -64,7 +64,7 @@ smart-linter/
 ├── detector/          # Detection, tracking, rule evaluation
 │   ├── types.py       # ObjectClass enum, Detection, TrackedObject dataclasses
 │   ├── detector.py    # YOLO11 adapter with COCO-to-MVP class mapping
-│   ├── tracker.py     # ByteTrack wrapper with centroid history + stale-track pruning
+│   ├── tracker.py     # ByteTrack wrapper: centroid history, stale-track pruning, tuned tracker thresholds
 │   ├── rule_engine.py # 6-rule state machine, ground line + bin zones live-tunable
 │   └── motion_gate.py # Frame-diff heuristic gating when detect+track runs
 ├── face/              # Face detection/recognition for owner identification
@@ -267,6 +267,7 @@ Interactive docs at `/docs` (Swagger UI). Every endpoint above except `/health`,
 - No Alembic: `database.init_db()` `ALTER TABLE`s in any columns missing from an existing on-disk database, so schema changes don't require deleting it
 - Jinja2 `cache_size=0` to avoid Python 3.14 compatibility issue
 - WebSocket processing runs in a thread executor; the YOLO model is a **shared, lock-serialized** singleton across all `/ws/process` connections in a process (ByteTrack's `persist=True` state lives on the model object itself, not per-caller)
+- `detector/tracker.py` generates a custom ByteTrack config per `conf_threshold` value instead of using ultralytics' stock `bytetrack.yaml`: stock defaults (`track_high_thresh`/`new_track_thresh=0.25`, `fuse_score=true`) silently drop any object detected below ~0.5-0.6 confidence before it ever gets a track id — fine for "person" (usually >0.5) but fatal for small/held trash objects, which are typically 0.15-0.35. If trash objects stop getting tracked after a config change, check this first before assuming it's a detection problem.
 - Events directory (`events/`) stores MP4 clips, JPEG previews, and (when produced) object/face crop JPEGs, all named `event_<id>[_object|_face].{mp4,jpg}`; `people/` stores enrolled reference photos
 - `.env` is gitignored — never commit secrets
 - Delete buttons in the UI use a two-click inline confirm, not `window.confirm()` — a native confirm dialog blocks the page (and breaks browser automation)
