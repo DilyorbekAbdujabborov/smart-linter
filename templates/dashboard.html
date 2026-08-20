@@ -75,6 +75,7 @@
 						class="text-sm font-medium px-3.5 py-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition"
 						>Logout</a
 					>
+					<span id="faceid-slot"></span>
 				</div>
 			</div>
 		</nav>
@@ -118,6 +119,7 @@
 		</main>
 
 		<script src="/static/auth.js"></script>
+		<script src="/static/faceid.js"></script>
 		<script>
 			(function () {
 				if (!Auth.requireAuth()) return;
