@@ -61,7 +61,15 @@ class Detector:
         self.conf_threshold = (
             conf_threshold if conf_threshold is not None else settings.conf_threshold
         )
-        logger.info("Loading YOLO model %s on %s", self.model_path, self.device)
+        self.imgsz = settings.imgsz
+        # Set torch threads for maximum CPU utilization. Default 0 = auto.
+        if settings.torch_num_threads > 0:
+            try:
+                import torch
+                torch.set_num_threads(settings.torch_num_threads)
+            except Exception:
+                pass
+        logger.info("Loading YOLO model %s on %s (imgsz=%d)", self.model_path, self.device, self.imgsz)
         self._model = YOLO(self.model_path)
         # Cache id->name so we avoid dict lookups per detection.
         self._names: Dict[int, str] = self._model.names
@@ -98,6 +106,7 @@ class Detector:
             image,
             conf=self.conf_threshold,
             device=self.device,
+            imgsz=self.imgsz,
             verbose=False,
         )
         detections: List[Detection] = []

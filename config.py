@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     yolo_model: str = "yolo11n.pt"
     device: str = "cpu"
     conf_threshold: float = 0.15
+    # Inference image size (pixels). Smaller = much faster on CPU.
+    # 640 = YOLO default (accurate, ~80ms/frame on 12-core CPU).
+    # 480 = good balance (~55ms, still detects small objects).
+    # 320 = maximum FPS (~44ms, but may miss distant/small objects).
+    imgsz: int = 480
+    # Number of torch intra-op threads. 0 = let torch decide (usually all cores).
+    # Set to 12 for 12-core CPU; lower if you need CPU for other tasks.
+    torch_num_threads: int = 0
 
     # --- Rule engine --------------------------------------------------------
     stationary_seconds: float = 2.0
