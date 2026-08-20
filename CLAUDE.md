@@ -132,8 +132,10 @@ All tunables are in `.env` (loaded via pydantic-settings). Key variables:
 | `CAMERA_ID` | `cam-01` | Camera identifier |
 | `YOLO_MODEL` | `yolo11n.pt` | YOLO11 weights |
 | `DEVICE` | `cpu` | Inference device (cpu/0/cuda) |
-| `CONF_THRESHOLD` | `0.30` | Min detection confidence |
-| `STATIONARY_SECONDS` | `5.0` | Seconds on ground before violation |
+| `CONF_THRESHOLD` | `0.15` | Min detection confidence |
+| `IMGSZ` | `480` | Inference image size in px (smaller = faster on CPU; 640 = default, 480 = balanced, 320 = max FPS) |
+| `TORCH_NUM_THREADS` | `0` | Torch intra-op threads (0 = auto/all cores; set to match your CPU core count) |
+| `STATIONARY_SECONDS` | `2.0` | Seconds on ground before violation |
 | `PROXIMITY_PX` | `120` | Person-object "close" distance in px |
 | `GROUND_Y_RATIO` | `0.55` | Frame height fraction for ground line (draggable live in the UI) |
 | `TRACK_TTL_SECONDS` | `30.0` | Drop a track's rule/history state after this long unseen |
@@ -202,6 +204,21 @@ Since the stock YOLO11/COCO model only approximates a trash bin via `toilet`, de
 Single-admin JWT auth (no user table — not multi-tenant). `POST /auth/login` (username/password) returns an access token (short-lived, `JWT_EXPIRE_MINUTES`) and a refresh token (long-lived, `JWT_REFRESH_EXPIRE_MINUTES`). `POST /auth/refresh` exchanges a valid refresh token for a new pair, rotating the refresh token each time. Tokens carry a `type` claim (`access`/`refresh`) so one can't be used as the other, and a random `jti` so tokens issued in the same second still differ.
 
 All data endpoints require a JWT (`Authorization: Bearer` header, or `?token=` query param for SSE/WebSocket, which can't set custom headers). `static/auth.js` is the shared client-side helper: stores both tokens in `localStorage`, and its `authFetch()` wrapper auto-refreshes on a 401 and retries once before redirecting to `/login`.
+
+### Client-Side Auth Robustness
+
+- **Skip unnecessary refresh:** `process.html` checks if the current access token is still valid before calling `/auth/refresh` — avoids failures after server restarts with a new `JWT_SECRET`.
+- **WS 1008 auto-retry:** If the WebSocket closes with code 1008 (bad/expired token), the client automatically refreshes the token and reconnects once before giving up.
+- **Response validation:** `auth.js` validates that `/auth/refresh` returns an `access_token` before overwriting `localStorage`, preventing silent auth corruption.
+- **Better error UI:** Failed auth shows a clear status message and resets button states instead of leaving the UI stuck.
+
+## Performance Tuning
+
+Two config knobs control CPU inference throughput:
+
+- **`IMGSZ` (default 480):** The square resolution YOLO resizes each frame to before inference. Lower = faster: 640 is the YOLO default (~80ms/frame on 12-core CPU), 480 is a good balance (~55ms), 320 is maximum FPS (~44ms) but may miss small/distant objects. The value is passed to both `Detector` and `Tracker`.
+- **`TORCH_NUM_THREADS` (default 0):** Controls PyTorch's intra-op thread count. 0 lets PyTorch use all available cores. Set explicitly (e.g. `12`) if you need to leave CPU headroom for other tasks.
+- **`WS_DETECT_EVERY_N_FRAMES` (default 1):** Run YOLO inference on every Nth WebSocket frame, reusing the last result for frames in between. Raise to 2–3 on very slow CPUs to keep the video stream smooth.
 
 ## API Endpoints
 
