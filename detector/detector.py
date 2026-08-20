@@ -14,6 +14,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from config import settings
+from detector.hardware import auto_tune
 from detector.types import Detection, ObjectClass
 from logging_utils import get_logger
 
@@ -56,8 +57,11 @@ class Detector:
         device: str | None = None,
         conf_threshold: float | None = None,
     ) -> None:
-        self.model_path = model_path or settings.yolo_model
-        self.device = device or settings.device
+        configured_model = model_path or settings.yolo_model
+        configured_device = device or settings.device
+        # Detected hardware (GPU presence, CPU core count) always wins over
+        # the configured value -- see detector/hardware.py for the policy.
+        self.device, self.model_path = auto_tune(configured_device, configured_model)
         self.conf_threshold = (
             conf_threshold if conf_threshold is not None else settings.conf_threshold
         )

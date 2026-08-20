@@ -66,7 +66,8 @@ smart-linter/
 │   ├── detector.py    # YOLO11 adapter with COCO-to-MVP class mapping
 │   ├── tracker.py     # ByteTrack wrapper: centroid history, stale-track pruning, tuned tracker thresholds
 │   ├── rule_engine.py # 6-rule state machine, ground line + bin zones live-tunable
-│   └── motion_gate.py # Frame-diff heuristic gating when detect+track runs
+│   ├── motion_gate.py # Frame-diff heuristic gating when detect+track runs
+│   └── hardware.py    # Auto-tunes DEVICE/YOLO_MODEL from detected CPU/GPU capability
 ├── face/              # Face detection/recognition for owner identification
 │   └── face_id.py     # YuNet detector + SFace recognizer wrapper (auto-downloads weights)
 ├── auth/              # JWT authentication
@@ -228,6 +229,7 @@ Config knobs that control CPU/GPU inference throughput:
 - **`WS_DETECT_EVERY_N_FRAMES` (default 1):** Run YOLO inference on every Nth WebSocket frame, reusing the last result for frames in between. Raise to 2–3 on very slow CPUs to keep the video stream smooth.
 - **`MOTION_GATE_ENABLED` (default true):** `detector/motion_gate.py` grayscale-diffs consecutive frames; below `MOTION_AREA_RATIO` of changed pixels, the frame skips detect+track entirely (recording/rolling-buffer still runs every frame — only the expensive inference is gated). `MOTION_GATE_HEARTBEAT_SECONDS` forces a pass periodically regardless, so the rule engine's stationary/proximity timers can't stall on a scene with no visible motion. Applies to both the CLI `process` pipeline and `/ws/process` (stacked on top of `WS_DETECT_EVERY_N_FRAMES` there).
 - **`DEVICE` (default cpu):** Set to `0` (first GPU) or `cuda` for GPU inference via Ultralytics — supported by config today. TensorRT export (`.engine`) is not wired in as a runtime path; export a model with `YOLO(...).export(format="engine")` and point `YOLO_MODEL` at the resulting file if you need it, but this hasn't been exercised in this repo.
+- **Hardware auto-tune (`detector/hardware.py`):** `Detector.__init__` runs `auto_tune()` on every startup, and detected capability **always overrides** `DEVICE`/`YOLO_MODEL` from `.env` (not just when unset) — logged whenever it does. A present CUDA GPU takes over from a configured `DEVICE=cpu`; a CPU with >= 8 cores and no GPU bumps the model from `yolo11n.pt` up to `yolo11s.pt` (an already-different model choice is left alone — this only ever upgrades off the nano default). Detection is lazy (only runs when a `Detector` is actually constructed), so `serve` stays lightweight until a `/ws/process` connection or `process` run needs it.
 
 ## API Endpoints
 
