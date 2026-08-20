@@ -27,6 +27,15 @@ class EventOut(BaseModel):
     person_id: Optional[int] = None
     person_name: Optional[str] = None
     face_similarity: Optional[float] = None
+    object_crop_path: Optional[str] = None
+    face_crop_path: Optional[str] = None
+    # SFace embedding (128 floats) of the matched face, JSON-encoded. Exposed
+    # here so this event's biometric vector can be compared against an
+    # external MIB/IIB database per the spec's Face_Embedding field --
+    # requires the same JWT auth as every other event field.
+    face_embedding: Optional[str] = None
+    camera_lat: Optional[float] = None
+    camera_lon: Optional[float] = None
 
 
 class PersonOut(BaseModel):
