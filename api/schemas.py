@@ -94,3 +94,18 @@ class CameraEnrollIn(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     frame: str  # base64-encoded JPEG
+
+
+class FaceIdentifyIn(BaseModel):
+    """Body for POST /face/identify: identify a face from a camera frame."""
+
+    frame: str  # base64-encoded JPEG
+
+
+class FaceIdentifyOut(BaseModel):
+    """Response from POST /face/identify."""
+
+    matched: bool
+    person_id: Optional[int] = None
+    name: Optional[str] = None
+    similarity: Optional[float] = None
