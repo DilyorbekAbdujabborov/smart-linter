@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import BinZoneIn, BinZoneOut, EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
+from api.schemas import BinZoneIn, BinZoneOut, CameraEnrollIn, EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
 from auth.security import (
     create_access_token,
     create_refresh_token,
@@ -222,6 +222,40 @@ def create_app() -> FastAPI:
 
         person = database.create_person(
             name=name,
+            embedding_json=embedding_to_json(embedding),
+            photo_path=str(photo_path),
+        )
+        return PersonOut.model_validate(person)
+
+    @app.post("/people/camera", response_model=PersonOut, tags=["people"])
+    async def enroll_person_from_camera(
+        body: CameraEnrollIn,
+        username: str = Depends(get_current_username),
+    ) -> PersonOut:
+        """Enroll a person from a base64-encoded camera frame (JPEG)."""
+        import base64
+        import uuid
+
+        import cv2
+        import numpy as np
+
+        from face.face_id import embedding_to_json
+
+        raw = base64.b64decode(body.frame)
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Could not decode image")
+
+        detected = _get_face_identifier().detect_and_embed(image)
+        if detected is None:
+            raise HTTPException(status_code=400, detail="No face detected in photo")
+        embedding, _bbox = detected
+
+        photo_path = people_dir / f"{uuid.uuid4().hex[:12]}.jpg"
+        cv2.imwrite(str(photo_path), image)
+
+        person = database.create_person(
+            name=body.name,
             embedding_json=embedding_to_json(embedding),
             photo_path=str(photo_path),
         )
