@@ -38,6 +38,22 @@ class Event(Base):
     person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     person_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     face_similarity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Cropped JPEGs of the discarded object and the violator's face at the
+    # trigger frame. Nullable: object_crop is only skipped if the write
+    # fails; face_crop additionally requires a non-empty roster (face
+    # matching is opt-in / zero-cost when nobody is enrolled).
+    object_crop_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    face_crop_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # SFace embedding (128 floats) of the matched face, JSON-encoded -- same
+    # format as Person.embedding. Stored for downstream/offline comparison
+    # against external biometric databases; deliberately not exposed by
+    # default reasoning in the API docs (see api/schemas.py EventOut).
+    face_embedding: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Static camera geolocation (settings.camera_lat/lon), copied onto each
+    # event at write time so historical events keep the coordinates that
+    # were in effect when they were recorded.
+    camera_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    camera_lon: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 class Person(Base):

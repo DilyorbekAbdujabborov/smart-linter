@@ -66,6 +66,11 @@ def _migrate_missing_columns() -> None:
         "person_id": "INTEGER",
         "person_name": "VARCHAR(128)",
         "face_similarity": "FLOAT",
+        "object_crop_path": "VARCHAR(255)",
+        "face_crop_path": "VARCHAR(255)",
+        "face_embedding": "TEXT",
+        "camera_lat": "FLOAT",
+        "camera_lon": "FLOAT",
     }
     with engine.begin() as conn:
         for column, coltype in additions.items():
@@ -99,6 +104,11 @@ def create_event(
     person_id: Optional[int] = None,
     person_name: Optional[str] = None,
     face_similarity: Optional[float] = None,
+    object_crop_path: Optional[str] = None,
+    face_crop_path: Optional[str] = None,
+    face_embedding: Optional[str] = None,
+    camera_lat: Optional[float] = None,
+    camera_lon: Optional[float] = None,
 ) -> Event:
     """Persist a new violation event and return it."""
     with session_scope() as session:
@@ -112,6 +122,11 @@ def create_event(
             person_id=person_id,
             person_name=person_name,
             face_similarity=face_similarity,
+            object_crop_path=object_crop_path,
+            face_crop_path=face_crop_path,
+            face_embedding=face_embedding,
+            camera_lat=camera_lat,
+            camera_lon=camera_lon,
         )
         session.add(event)
         session.flush()  # populate event.id before the session closes
