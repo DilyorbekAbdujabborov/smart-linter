@@ -59,6 +59,7 @@ class Tracker:
             tracker="bytetrack.yaml",
             conf=self._detector.conf_threshold,
             device=self._detector.device,
+            imgsz=self._detector.imgsz,
             verbose=False,
         )
 
