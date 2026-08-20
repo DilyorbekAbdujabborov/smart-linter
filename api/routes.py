@@ -394,7 +394,9 @@ def create_app() -> FastAPI:
         if event is None:
             raise HTTPException(status_code=404, detail="Event not found")
         # Best-effort media cleanup; DB row removal is the source of truth.
-        for path in (event.video_path, event.preview_image):
+        paths = [event.video_path, event.preview_image]
+        paths.extend(p for p in (event.object_crop_path, event.face_crop_path) if p)
+        for path in paths:
             try:
                 os.remove(path)
             except OSError:
@@ -440,6 +442,7 @@ def create_app() -> FastAPI:
         await websocket.accept()
         import base64
         import cv2
+        from detector.motion_gate import MotionGate
         from detector.tracker import Tracker
         from detector.rule_engine import RuleEngine
         from camera.video_reader import VideoReader
@@ -459,7 +462,7 @@ def create_app() -> FastAPI:
         detect_every = max(1, settings.ws_detect_every_n_frames)
         last_result = {"tracked": [], "violations": []}
 
-        def process_next(frame_iter, tracker, rule_engine):
+        def process_next(frame_iter, tracker, rule_engine, motion_gate):
             """Read + detect + annotate one frame (blocking CPU work).
 
             Runs in a thread executor so a live camera never blocks the
@@ -470,7 +473,14 @@ def create_app() -> FastAPI:
             if frame is None:
                 return None
 
-            if frame.index % detect_every == 0:
+            due = frame.index % detect_every == 0
+            # Motion gate stacks on top of the N-th-frame schedule: even on a
+            # scheduled frame, skip the detect pass if nothing moved (its own
+            # heartbeat still forces one periodically).
+            moved = motion_gate is None or motion_gate.should_detect(
+                frame.timestamp, frame.image
+            )
+            if due and moved:
                 # Serialize access: the underlying YOLO model (and its
                 # persisted ByteTrack state) is shared across connections.
                 with _detector_lock:
@@ -535,6 +545,7 @@ def create_app() -> FastAPI:
                 # connection so this stream starts with a clean slate.
                 detector.model.predictor = None
             tracker = Tracker(detector)
+            motion_gate = MotionGate() if settings.motion_gate_enabled else None
 
             with VideoReader(source) as reader:
                 rule_engine = RuleEngine(reader.height, reader.width)
@@ -585,7 +596,7 @@ def create_app() -> FastAPI:
                 try:
                     while True:
                         payload = await loop.run_in_executor(
-                            None, process_next, frame_iter, tracker, rule_engine
+                            None, process_next, frame_iter, tracker, rule_engine, motion_gate
                         )
                         if payload is None:
                             break  # end of file / stream
