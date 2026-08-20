@@ -99,7 +99,8 @@ State machine: CARRIED -> RELEASED -> ON_GROUND -> REPORTED
 
 All settings in `.env`, accessed via `settings` singleton:
 - `VIDEO_SOURCE`, `CAMERA_ID`, `YOLO_MODEL`, `DEVICE`
-- `CONF_THRESHOLD`, `STATIONARY_SECONDS`, `PROXIMITY_PX`, `GROUND_Y_RATIO`, `TRACK_TTL_SECONDS`
+- `CONF_THRESHOLD`, `IMGSZ`, `TORCH_NUM_THREADS`
+- `STATIONARY_SECONDS`, `PROXIMITY_PX`, `GROUND_Y_RATIO`, `TRACK_TTL_SECONDS`
 - `PRE_EVENT_SECONDS`, `POST_EVENT_SECONDS`, `EVENTS_DIR`, `VIDEO_CODEC`
 - `WS_DETECT_EVERY_N_FRAMES` — run detection every Nth WS frame, raise on slow CPUs
 - `FACE_MODELS_DIR`, `FACE_MATCH_THRESHOLD`, `PEOPLE_DIR`
@@ -129,6 +130,22 @@ All settings in `.env`, accessed via `settings` singleton:
 | WS | `/ws/process?source=...&token=...` | Real-time annotated frames + live control messages |
 
 Everything above requires a JWT except `/health`, `/auth/*`, and the HTML page shells.
+
+### Performance Tuning
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `IMGSZ` | `480` | Inference resolution (px). 640=accurate, 480=balanced, 320=max FPS |
+| `TORCH_NUM_THREADS` | `0` | PyTorch threads (0=auto). Set to CPU core count if needed |
+| `WS_DETECT_EVERY_N_FRAMES` | `1` | Skip N frames between detections in WS. Raise on slow CPUs |
+
+Both `Detector` and `Tracker` use the same `IMGSZ` value for consistent inference.
+
+### Client-Side Auth
+
+- `process.html` skips `/auth/refresh` if the current access token is still valid
+- WebSocket code 1008 (bad token) triggers automatic refresh + reconnect
+- `auth.js` validates refresh responses before writing to `localStorage`
 
 ### Testing
 
