@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # --- Video source -------------------------------------------------------
     video_source: str = "sample.mp4"
     camera_id: str = "cam-01"
+    # Static camera geolocation attached to every event this deployment
+    # records. None if unset -- single-camera MVP, so this is one pair of
+    # coordinates rather than a per-camera registry.
+    camera_lat: float | None = None
+    camera_lon: float | None = None
 
     # --- Model --------------------------------------------------------------
     yolo_model: str = "yolo11n.pt"
@@ -47,7 +52,10 @@ class Settings(BaseSettings):
     torch_num_threads: int = 0
 
     # --- Rule engine --------------------------------------------------------
-    stationary_seconds: float = 2.0
+    # Seconds an object must sit stationary on the ground, with the owner out
+    # of proximity, before it's confirmed as litter (the spec's "10 second
+    # timer" from the moment it separates/lands).
+    stationary_seconds: float = 10.0
     proximity_px: float = 120.0
     stationary_tolerance_px: float = 25.0
     ground_y_ratio: float = 0.30
@@ -55,9 +63,26 @@ class Settings(BaseSettings):
     # (bounds memory on long-running / RTSP streams).
     track_ttl_seconds: float = 30.0
 
+    # --- Motion-gated inference ----------------------------------------------
+    # Skips YOLO/tracking on frames with no meaningful pixel-level motion, so
+    # a static scene doesn't burn CPU/GPU. A frame-diff heuristic, not a
+    # learned model -- cheap enough to run every frame.
+    motion_gate_enabled: bool = True
+    # Per-pixel grayscale intensity delta (0-255) above which a pixel counts
+    # as "changed" between consecutive frames.
+    motion_pixel_threshold: int = 25
+    # Fraction of frame pixels that must have changed for the frame to count
+    # as "motion" and trigger a full detection pass.
+    motion_area_ratio: float = 0.02
+    # Even with zero motion, force a detection pass at least this often so a
+    # slow/subtle change (or a missed motion event) can't stall the rule
+    # engine's timers indefinitely.
+    motion_gate_heartbeat_seconds: float = 1.0
+
     # --- Recorder -----------------------------------------------------------
-    pre_event_seconds: float = 5.0
-    post_event_seconds: float = 5.0
+    # 12-second rolling-buffer clip: 2s before the event, 10s after.
+    pre_event_seconds: float = 2.0
+    post_event_seconds: float = 10.0
     events_dir: str = "events"
     # FourCC codec for clip output. "mp4v" always works with stock OpenCV
     # wheels; "avc1" (H264) is smaller/faster to decode but needs an OpenCV
