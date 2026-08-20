@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from api.schemas import BinZoneIn, BinZoneOut, CameraEnrollIn, EventOut, HealthOut, PersonOut, RefreshIn, TokenOut
+from api.schemas import BinZoneIn, BinZoneOut, CameraEnrollIn, EventOut, FaceIdentifyIn, FaceIdentifyOut, HealthOut, PersonOut, RefreshIn, TokenOut
 from auth.security import (
     create_access_token,
     create_refresh_token,
@@ -278,6 +278,51 @@ def create_app() -> FastAPI:
             logger.warning("Could not remove person photo %s", person.photo_path)
         database.delete_person(person_id)
         return {"deleted": person_id}
+
+    # -- Face identification -------------------------------------------------
+
+    @app.post("/face/identify", response_model=FaceIdentifyOut, tags=["face"])
+    async def identify_face(
+        body: FaceIdentifyIn,
+        username: str = Depends(get_current_username),
+    ) -> FaceIdentifyOut:
+        """Identify a face from a base64 JPEG frame against the enrolled roster."""
+        import base64
+
+        import cv2
+        import numpy as np
+
+        from face.face_id import embedding_from_json
+
+        raw = base64.b64decode(body.frame)
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Could not decode image")
+
+        fi = _get_face_identifier()
+        detected = fi.detect_and_embed(image)
+        if detected is None:
+            return FaceIdentifyOut(matched=False)
+
+        embedding, _bbox = detected
+        roster = [
+            (p.id, p.name, embedding_from_json(p.embedding))
+            for p in database.list_people()
+        ]
+        if not roster:
+            return FaceIdentifyOut(matched=False)
+
+        match = fi.best_match(embedding, roster)
+        if match is None:
+            return FaceIdentifyOut(matched=False)
+
+        person_id, name, similarity = match
+        return FaceIdentifyOut(
+            matched=True,
+            person_id=person_id,
+            name=name,
+            similarity=round(similarity, 4),
+        )
 
     # -- Bin zones (R6) ---------------------------------------------------------
 
