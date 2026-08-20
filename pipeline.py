@@ -19,26 +19,40 @@ video frame needed to crop a face out of it.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from config import settings
 from database import database
 from detector.detector import Detector
+from detector.motion_gate import MotionGate
 from detector.rule_engine import RuleEngine, Violation
 from detector.tracker import Tracker
 from detector.types import ObjectClass, TrackedObject
 from camera.video_reader import VideoReader
-from face.face_id import FaceIdentifier, embedding_from_json
+from face.face_id import FaceIdentifier, embedding_from_json, embedding_to_json
 from logging_utils import get_logger
 from recorder.recorder import ClipResult, Recorder
 
 logger = get_logger(__name__)
 
-# (person_id, name, similarity) for a face match, or all-None for no match.
-FaceMatch = Tuple[Optional[int], Optional[str], Optional[float]]
-_NO_MATCH: FaceMatch = (None, None, None)
+
+class OwnerIdentification(NamedTuple):
+    """Everything learned about a violation's owner at trigger time."""
+
+    person_id: Optional[int]
+    person_name: Optional[str]
+    similarity: Optional[float]
+    # Tight crop around the detected face (not the whole person box), saved
+    # as evidence regardless of whether it matched anyone on the roster.
+    face_crop: Optional[np.ndarray]
+    face_embedding_json: Optional[str]
+
+
+_NO_MATCH = OwnerIdentification(None, None, None, None, None)
 
 
 class Pipeline:
@@ -54,12 +68,14 @@ class Pipeline:
         # ever runs.
         self._face_identifier: Optional[FaceIdentifier] = None
         self._roster: List[Tuple[int, str, np.ndarray]] = []
-        # Latest crop seen for each tracked person, used to grab a face for
-        # the owner of a trash object at the moment a violation fires.
+        # Best (largest-area) crop seen so far for each tracked person, used
+        # to grab a face for the owner of a trash object at the moment a
+        # violation fires -- larger usually means more frontal/higher-res.
         self._person_crops: Dict[int, Tuple[float, np.ndarray]] = {}
+        self._person_last_seen: Dict[int, float] = {}
         # Face match looked up at trigger time, consumed when the clip for
         # that trash object's track id finishes and is stored.
-        self._face_matches: Dict[int, FaceMatch] = {}
+        self._face_matches: Dict[int, OwnerIdentification] = {}
 
     def run(self) -> int:
         """Process the entire source, storing any violations found.
@@ -70,7 +86,9 @@ class Pipeline:
         database.init_db()
         self._load_roster()
         tracker = Tracker(self._detector)
+        motion_gate = MotionGate() if settings.motion_gate_enabled else None
         events_recorded = 0
+        tracked: List[TrackedObject] = []
 
         with VideoReader(self.source) as reader:
             rule_engine = RuleEngine(frame_height=reader.height, frame_width=reader.width)
@@ -81,11 +99,18 @@ class Pipeline:
             )
 
             for frame in reader.frames():
-                # 1) detect + track
-                tracked = tracker.update(frame.image)
-                self._update_person_crops(frame.timestamp, frame.image, tracked)
-                # 2) evaluate rules
-                violations = rule_engine.process(frame.timestamp, tracked)
+                # 1) motion gate: skip the expensive detect+track pass on
+                # frames with no meaningful change (heartbeat still forces
+                # one periodically so the rule engine's timers can't stall).
+                run_detect = motion_gate is None or motion_gate.should_detect(
+                    frame.timestamp, frame.image
+                )
+                violations: List[Violation] = []
+                if run_detect:
+                    tracked = tracker.update(frame.image)
+                    self._update_person_crops(frame.timestamp, frame.image, tracked)
+                    # 2) evaluate rules
+                    violations = rule_engine.process(frame.timestamp, tracked)
                 # 3) keep rolling buffer fed; collect completed clips
                 completed = recorder.feed(frame.timestamp, frame.image)
                 # 4) start recording new violations
@@ -102,14 +127,26 @@ class Pipeline:
                 self._store(result)
                 events_recorded += 1
 
+        if motion_gate is not None and motion_gate.frames_seen:
+            logger.info(
+                "Motion gate skipped %d/%d frames (%.0f%%)",
+                motion_gate.frames_gated,
+                motion_gate.frames_seen,
+                motion_gate.skip_ratio * 100,
+            )
         logger.info("Pipeline finished: %d event(s) recorded", events_recorded)
         return events_recorded
 
     def _store(self, result: ClipResult) -> None:
         """Persist a completed clip as a DB event."""
-        person_id, person_name, similarity = self._face_matches.pop(
-            result.violation.track_id, _NO_MATCH
-        )
+        owner = self._face_matches.pop(result.violation.track_id, _NO_MATCH)
+
+        face_crop_path: Optional[str] = None
+        if owner.face_crop is not None and owner.face_crop.size:
+            stem = Path(result.video_path).stem
+            face_crop_path = str(Path(settings.events_dir) / f"{stem}_face.jpg")
+            cv2.imwrite(face_crop_path, owner.face_crop)
+
         database.create_event(
             camera_id=self.camera_id,
             confidence=result.violation.confidence,
@@ -117,9 +154,14 @@ class Pipeline:
             video_path=result.video_path,
             preview_image=result.preview_image,
             timestamp=datetime.now(timezone.utc),
-            person_id=person_id,
-            person_name=person_name,
-            face_similarity=similarity,
+            person_id=owner.person_id,
+            person_name=owner.person_name,
+            face_similarity=owner.similarity,
+            object_crop_path=result.object_crop,
+            face_crop_path=face_crop_path,
+            face_embedding=owner.face_embedding_json,
+            camera_lat=settings.camera_lat,
+            camera_lon=settings.camera_lon,
         )
 
     # -- face identification --------------------------------------------------
@@ -136,7 +178,12 @@ class Pipeline:
     def _update_person_crops(
         self, timestamp: float, image: np.ndarray, tracked: List[TrackedObject]
     ) -> None:
-        """Cache each visible person's latest bbox crop for later face lookup."""
+        """Cache each visible person's best (largest-area) crop so far.
+
+        Largest-area is a cheap proxy for "most frontal / highest-res" --
+        the spec's "Best Resolution Crop" -- without running face detection
+        on every frame just to score candidates.
+        """
         if not self._roster:
             return  # nobody enrolled -- skip the bookkeeping entirely
         h, w = image.shape[:2]
@@ -148,30 +195,50 @@ class Pipeline:
             x2, y2 = min(w, x2), min(h, y2)
             if x2 <= x1 or y2 <= y1:
                 continue
-            self._person_crops[obj.track_id] = (timestamp, image[y1:y2, x1:x2].copy())
+            self._person_last_seen[obj.track_id] = timestamp
+            area = (x2 - x1) * (y2 - y1)
+            best = self._person_crops.get(obj.track_id)
+            if best is None or area > best[0]:
+                self._person_crops[obj.track_id] = (area, image[y1:y2, x1:x2].copy())
 
         stale = [
             track_id
-            for track_id, (last_seen, _crop) in self._person_crops.items()
+            for track_id, last_seen in self._person_last_seen.items()
             if timestamp - last_seen > settings.track_ttl_seconds
         ]
         for track_id in stale:
-            del self._person_crops[track_id]
+            self._person_crops.pop(track_id, None)
+            self._person_last_seen.pop(track_id, None)
 
-    def _identify_owner(self, violation: Violation) -> FaceMatch:
-        """Match the violation's owning person against the enrolled roster."""
+    def _identify_owner(self, violation: Violation) -> OwnerIdentification:
+        """Match the violation's owning person against the enrolled roster.
+
+        Also returns a tight face crop + embedding whenever a face is found,
+        even without a roster match -- evidence for the event regardless of
+        whether the violator happens to be enrolled.
+        """
         if violation.owner_track_id is None or not self._roster:
             return _NO_MATCH
         cached = self._person_crops.get(violation.owner_track_id)
         if cached is None:
             return _NO_MATCH
-        _, crop = cached
+        _area, crop = cached
 
         if self._face_identifier is None:
             self._face_identifier = FaceIdentifier()
         detected = self._face_identifier.detect_and_embed(crop)
         if detected is None:
             return _NO_MATCH
-        embedding, _bbox = detected
+        embedding, (fx, fy, fw, fh) = detected
+
+        ch, cw = crop.shape[:2]
+        fx, fy = max(0, fx), max(0, fy)
+        fx2, fy2 = min(cw, fx + fw), min(ch, fy + fh)
+        face_crop = crop[fy:fy2, fx:fx2].copy() if fx2 > fx and fy2 > fy else None
+
+        embedding_json = embedding_to_json(embedding)
         match = self._face_identifier.best_match(embedding, self._roster)
-        return match if match is not None else _NO_MATCH
+        if match is None:
+            return OwnerIdentification(None, None, None, face_crop, embedding_json)
+        person_id, name, similarity = match
+        return OwnerIdentification(person_id, name, similarity, face_crop, embedding_json)
