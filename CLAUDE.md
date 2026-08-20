@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Smart Litter Detection System — an MVP computer vision application that detects when a person throws trash on the ground from MP4 video or RTSP CCTV streams. Records 10-second clips of violations and exposes events via REST API + web dashboard.
+Smart Litter Detection System — an MVP computer vision application that detects when a person throws trash on the ground from MP4 video or RTSP CCTV streams. Records 12-second clips (2s pre-event + 10s post-event) of violations and exposes events via REST API + web dashboard.
 
 **Language:** Python 3.12+
 **Status:** MVP / Proof of Concept
@@ -42,12 +42,13 @@ After reading these 8 files you will understand the full system.
 
 ```
 Video/RTSP Source
+  → detector/motion_gate.py      (frame-diff gate: skip detect+track when nothing moves)
   → camera/video_reader.py      (Frame yields)
   → detector/detector.py         (YOLO11 inference, shared model across WS connections)
   → detector/tracker.py          (ByteTrack tracking)
   → detector/rule_engine.py      (6-rule state machine, live-tunable ground line + bin zones)
   → face/face_id.py              (owner face match against enrolled Person roster)
-  → recorder/recorder.py         (10s clip + JPEG)
+  → recorder/recorder.py         (12s clip + preview/object-crop JPEGs)
   → database/database.py         (SQLAlchemy CRUD, WAL mode)
   → api/routes.py                (FastAPI REST + SSE + WebSocket + JWT auth)
 ```
@@ -64,7 +65,8 @@ smart-linter/
 │   ├── types.py       # ObjectClass enum, Detection, TrackedObject dataclasses
 │   ├── detector.py    # YOLO11 adapter with COCO-to-MVP class mapping
 │   ├── tracker.py     # ByteTrack wrapper with centroid history + stale-track pruning
-│   └── rule_engine.py # 6-rule state machine, ground line + bin zones live-tunable
+│   ├── rule_engine.py # 6-rule state machine, ground line + bin zones live-tunable
+│   └── motion_gate.py # Frame-diff heuristic gating when detect+track runs
 ├── face/              # Face detection/recognition for owner identification
 │   └── face_id.py     # YuNet detector + SFace recognizer wrapper (auto-downloads weights)
 ├── auth/              # JWT authentication
@@ -130,19 +132,24 @@ All tunables are in `.env` (loaded via pydantic-settings). Key variables:
 |----------|---------|-------------|
 | `VIDEO_SOURCE` | `sample.mp4` | MP4 path or RTSP URL |
 | `CAMERA_ID` | `cam-01` | Camera identifier |
+| `CAMERA_LAT` / `CAMERA_LON` | _(empty)_ | Static geolocation attached to every event this deployment records |
 | `YOLO_MODEL` | `yolo11n.pt` | YOLO11 weights |
 | `DEVICE` | `cpu` | Inference device (cpu/0/cuda) |
 | `CONF_THRESHOLD` | `0.15` | Min detection confidence |
 | `IMGSZ` | `480` | Inference image size in px (smaller = faster on CPU; 640 = default, 480 = balanced, 320 = max FPS) |
 | `TORCH_NUM_THREADS` | `0` | Torch intra-op threads (0 = auto/all cores; set to match your CPU core count) |
-| `STATIONARY_SECONDS` | `2.0` | Seconds on ground before violation |
+| `STATIONARY_SECONDS` | `10.0` | Seconds on ground (owner out of proximity) before violation confirms |
 | `PROXIMITY_PX` | `120` | Person-object "close" distance in px |
 | `GROUND_Y_RATIO` | `0.55` | Frame height fraction for ground line (draggable live in the UI) |
 | `TRACK_TTL_SECONDS` | `30.0` | Drop a track's rule/history state after this long unseen |
-| `PRE_EVENT_SECONDS` | `5.0` | Clip pre-event window |
-| `POST_EVENT_SECONDS` | `5.0` | Clip post-event window |
+| `MOTION_GATE_ENABLED` | `true` | Skip detect+track on frames with no meaningful motion |
+| `MOTION_PIXEL_THRESHOLD` | `25` | Per-pixel grayscale delta (0-255) counted as "changed" |
+| `MOTION_AREA_RATIO` | `0.02` | Fraction of frame pixels that must change to count as motion |
+| `MOTION_GATE_HEARTBEAT_SECONDS` | `1.0` | Force a detection pass at least this often even with zero motion |
+| `PRE_EVENT_SECONDS` | `2.0` | Clip pre-event window |
+| `POST_EVENT_SECONDS` | `10.0` | Clip post-event window (2s + 10s = 12s clip) |
 | `VIDEO_CODEC` | `mp4v` | Clip FourCC codec (`avc1` if your OpenCV build supports H264) |
-| `WS_DETECT_EVERY_N_FRAMES` | `1` | Run detection every Nth frame in `/ws/process` (raise on slow CPUs) |
+| `WS_DETECT_EVERY_N_FRAMES` | `1` | Run detection every Nth frame in `/ws/process` (raise on slow CPUs; stacks with the motion gate) |
 | `FACE_MODELS_DIR` | `models` | Where YuNet/SFace ONNX weights auto-download |
 | `FACE_MATCH_THRESHOLD` | `0.363` | Cosine-similarity threshold for a face match |
 | `PEOPLE_DIR` | `people` | Enrolled people's reference photos |
@@ -182,7 +189,7 @@ State machine: `CARRIED → RELEASED → ON_GROUND → REPORTED`
 
 ## Face Identification
 
-When a violation fires, `Pipeline` looks up the owning person's last-seen face crop (cached every frame from tracked `PERSON` boxes) and matches it against the enrolled `Person` roster (`face/face_id.py`: OpenCV YuNet detector + SFace recognizer, no extra ML dependency). A match attaches `person_id` / `person_name` / `face_similarity` to the stored `Event`. Enroll people at `/roster` (`POST /people`, name + one clear photo). Costs nothing when the roster is empty — the crop/detect/match path is skipped entirely.
+When a violation fires, `Pipeline` looks up the owning person's *best* face crop — the largest-area `PERSON` box seen for that track so far, a cheap proxy for the spec's "best resolution crop" — and matches it against the enrolled `Person` roster (`face/face_id.py`: OpenCV YuNet detector + SFace recognizer, no extra ML dependency). A match attaches `person_id` / `person_name` / `face_similarity` to the stored `Event`. Whenever a face is detected at trigger time — matched or not — a tight face crop (`face_crop_path`) and its SFace embedding (`face_embedding`, JSON-encoded) are also saved on the event, so unmatched violators still leave identifiable evidence. Enroll people at `/roster` (`POST /people`, name + one clear photo). Costs nothing when the roster is empty — the crop/detect/match path is skipped entirely.
 
 ## Bin Zones (R6)
 
@@ -214,11 +221,13 @@ All data endpoints require a JWT (`Authorization: Bearer` header, or `?token=` q
 
 ## Performance Tuning
 
-Two config knobs control CPU inference throughput:
+Config knobs that control CPU/GPU inference throughput:
 
 - **`IMGSZ` (default 480):** The square resolution YOLO resizes each frame to before inference. Lower = faster: 640 is the YOLO default (~80ms/frame on 12-core CPU), 480 is a good balance (~55ms), 320 is maximum FPS (~44ms) but may miss small/distant objects. The value is passed to both `Detector` and `Tracker`.
 - **`TORCH_NUM_THREADS` (default 0):** Controls PyTorch's intra-op thread count. 0 lets PyTorch use all available cores. Set explicitly (e.g. `12`) if you need to leave CPU headroom for other tasks.
 - **`WS_DETECT_EVERY_N_FRAMES` (default 1):** Run YOLO inference on every Nth WebSocket frame, reusing the last result for frames in between. Raise to 2–3 on very slow CPUs to keep the video stream smooth.
+- **`MOTION_GATE_ENABLED` (default true):** `detector/motion_gate.py` grayscale-diffs consecutive frames; below `MOTION_AREA_RATIO` of changed pixels, the frame skips detect+track entirely (recording/rolling-buffer still runs every frame — only the expensive inference is gated). `MOTION_GATE_HEARTBEAT_SECONDS` forces a pass periodically regardless, so the rule engine's stationary/proximity timers can't stall on a scene with no visible motion. Applies to both the CLI `process` pipeline and `/ws/process` (stacked on top of `WS_DETECT_EVERY_N_FRAMES` there).
+- **`DEVICE` (default cpu):** Set to `0` (first GPU) or `cuda` for GPU inference via Ultralytics — supported by config today. TensorRT export (`.engine`) is not wired in as a runtime path; export a model with `YOLO(...).export(format="engine")` and point `YOLO_MODEL` at the resulting file if you need it, but this hasn't been exercised in this repo.
 
 ## API Endpoints
 
@@ -246,6 +255,10 @@ Two config knobs control CPU inference throughput:
 
 Interactive docs at `/docs` (Swagger UI). Every endpoint above except `/health`, `/auth/*`, and the HTML page shells requires a valid access token.
 
+### Event Payload
+
+`EventOut` (`/events`, `/events/{id}`) carries: `camera_id`, `camera_lat`/`camera_lon`, `timestamp`, `confidence`, `object_type`, `video_path` (12s clip), `preview_image` (trigger-frame JPEG), `object_crop_path` (cropped discarded-object JPEG), and — when a face was found at trigger time — `person_id`/`person_name`/`face_similarity` (roster match, if any), `face_crop_path` (cropped face JPEG), and `face_embedding` (SFace 128-float vector, JSON-encoded; requires the same JWT as every other field — treat it as sensitive biometric data downstream). All media paths are servable under `/media/{basename}` alongside the existing clip/preview files.
+
 ## Important Notes
 
 - YOLO11 weights (`yolo11n.pt`) and the face models (`models/*.onnx`) auto-download on first run
@@ -254,7 +267,7 @@ Interactive docs at `/docs` (Swagger UI). Every endpoint above except `/health`,
 - No Alembic: `database.init_db()` `ALTER TABLE`s in any columns missing from an existing on-disk database, so schema changes don't require deleting it
 - Jinja2 `cache_size=0` to avoid Python 3.14 compatibility issue
 - WebSocket processing runs in a thread executor; the YOLO model is a **shared, lock-serialized** singleton across all `/ws/process` connections in a process (ByteTrack's `persist=True` state lives on the model object itself, not per-caller)
-- Events directory (`events/`) stores MP4 clips and JPEG previews; `people/` stores enrolled reference photos
+- Events directory (`events/`) stores MP4 clips, JPEG previews, and (when produced) object/face crop JPEGs, all named `event_<id>[_object|_face].{mp4,jpg}`; `people/` stores enrolled reference photos
 - `.env` is gitignored — never commit secrets
 - Delete buttons in the UI use a two-click inline confirm, not `window.confirm()` — a native confirm dialog blocks the page (and breaks browser automation)
 
@@ -263,7 +276,7 @@ Interactive docs at `/docs` (Swagger UI). Every endpoint above except `/health`,
 - Multiple cameras (one Pipeline per source)
 - PostgreSQL (swap `DATABASE_URL`)
 - Redis/RabbitMQ queues (between recorder and DB)
-- GPU inference (`DEVICE=0`) — supported by config, not the default
+- GPU inference (`DEVICE=0`) — supported by config, not the default; TensorRT engine export/runtime not wired in (see Performance Tuning)
 - Custom YOLO models trained on real litter/bin classes (edit mapping in `detector/detector.py`)
 - Docker/Kubernetes deployment
 - Action/pose/plate recognition (new detectors behind same interface)
