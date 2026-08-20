@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -37,6 +37,10 @@ class ClipResult:
     video_path: str
     preview_image: str
     violation: Violation
+    # Cropped JPEG of just the discarded object (violation.bbox on the
+    # trigger frame). None if the crop turned out empty (e.g. bbox clipped
+    # entirely off-frame between trigger and flush).
+    object_crop: Optional[str] = None
 
 
 @dataclass
@@ -137,6 +141,9 @@ class Recorder:
         writer.release()
 
         cv2.imwrite(str(preview_path), clip.preview)
+
+        object_crop_path = self._write_object_crop(clip, clip_id)
+
         logger.info(
             "Wrote clip %s (%d frames) + preview", video_path.name, len(clip.frames)
         )
@@ -144,4 +151,17 @@ class Recorder:
             video_path=str(video_path),
             preview_image=str(preview_path),
             violation=clip.violation,
+            object_crop=object_crop_path,
         )
+
+    def _write_object_crop(self, clip: _PendingClip, clip_id: str) -> Optional[str]:
+        """Crop the discarded object out of the trigger frame and save it."""
+        h, w = clip.preview.shape[:2]
+        x1, y1, x2, y2 = (int(v) for v in clip.violation.bbox)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        crop_path = self._events_dir / f"event_{clip_id}_object.jpg"
+        cv2.imwrite(str(crop_path), clip.preview[y1:y2, x1:x2])
+        return str(crop_path)
