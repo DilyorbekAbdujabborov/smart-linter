@@ -87,3 +87,10 @@ class RefreshIn(BaseModel):
     """Body for POST /auth/refresh."""
 
     refresh_token: str
+
+
+class CameraEnrollIn(BaseModel):
+    """Body for POST /people/camera: enroll a person from a captured frame."""
+
+    name: str = Field(min_length=1, max_length=200)
+    frame: str  # base64-encoded JPEG
