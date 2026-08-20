@@ -73,7 +73,7 @@ uvicorn api.routes:app --reload
 | `templates/login.html` | Login page |
 | `templates/dashboard.html` | Event dashboard (SSE live, face-match badge, delete) |
 | `templates/process.html` | Real-time detection (WS + canvas, draggable ground line, drawable bin zones) |
-| `templates/roster.html` | Enroll/list/delete people for face matching |
+| `templates/roster.html` | Enroll/list/delete people for face matching (with camera capture) |
 
 ### Architecture Flow
 
@@ -124,6 +124,7 @@ All settings in `.env`, accessed via `settings` singleton:
 | DELETE | `/events/{id}` | Delete event + media |
 | GET | `/events/{id}/download` | Download MP4 clip |
 | POST/GET | `/people` | Enroll / list people |
+| POST | `/people/camera` | Enroll person from camera frame (base64 JPEG) |
 | DELETE | `/people/{id}` | Remove person |
 | POST/GET | `/bin-zones` | Add / list remembered bin zones |
 | DELETE | `/bin-zones/{id}` | Forget a bin zone |
