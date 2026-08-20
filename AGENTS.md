@@ -70,6 +70,7 @@ uvicorn api.routes:app --reload
 | `api/schemas.py` | Pydantic response models |
 | `api/routes.py` | FastAPI app (REST, SSE, WS, HTML, JWT auth) |
 | `static/auth.js` | Shared client token storage + refresh-on-401 fetch wrapper |
+| `static/faceid.js` | Navbar FaceID widget (webcam -> identify person in real-time) |
 | `templates/login.html` | Login page |
 | `templates/dashboard.html` | Event dashboard (SSE live, face-match badge, delete) |
 | `templates/process.html` | Real-time detection (WS + canvas, draggable ground line, drawable bin zones) |
@@ -128,6 +129,7 @@ All settings in `.env`, accessed via `settings` singleton:
 | DELETE | `/people/{id}` | Remove person |
 | POST/GET | `/bin-zones` | Add / list remembered bin zones |
 | DELETE | `/bin-zones/{id}` | Forget a bin zone |
+| POST | `/face/identify` | Identify a face from camera frame against roster |
 | WS | `/ws/process?source=...&token=...` | Real-time annotated frames + live control messages |
 
 Everything above requires a JWT except `/health`, `/auth/*`, and the HTML page shells.
